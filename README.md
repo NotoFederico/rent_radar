@@ -1,41 +1,54 @@
-# Rent Radar - Real Estate Monitoring & Alert System
+# Rent Radar - Sistema de Monitoreo Inmobiliario
 
-Automated property tracking system that monitors MercadoLibre real estate listings in real-time, detects new opportunities, and sends instant notifications via Telegram.
+Sistema automatizado que monitorea publicaciones de alquiler en múltiples portales argentinos, transforma y almacena los datos, y envía alertas instantáneas por Telegram.
 
 ## 📑 Índice
 
-- [🎯 Overview](#-overview)
-- [✨ Key Features](#-key-features)
-- [🛠️ Tech Stack](#-tech-stack)
-- [📋 Use Case](#-use-case)
+- [🎯 Descripción](#-descripción)
+- [🏗️ Arquitectura](#-arquitectura)
+- [✨ Funcionalidades](#-funcionalidades)
+- [🛠️ Stack tecnológico](#-stack-tecnológico)
+- [📋 Caso de uso](#-caso-de-uso)
 
 ---
 
-## 🎯 Overview
+## 🎯 Descripción
 
-MeliCasa scrapes rental property listings from MercadoLibre (Argentina's largest marketplace), stores historical data, and alerts you immediately when new properties matching your criteria appear. Perfect for competitive rental markets where being first matters.
+Rent Radar scrapea publicaciones de alquiler de ZonaProp, ArgenProp, MercadoLibre y Properati, normaliza y guarda los datos crudos en Neon Postgres, los transforma con dbt, y te avisa al instante cuando aparece una propiedad que cumple tus criterios. El pipeline corre en un servidor local orquestado desde Prefect Cloud.
 
-## ✨ Key Features
+## 🏗️ Arquitectura
 
-- 🔍 **Automated Web Scraping** - Monitors specific neighborhoods with custom filters (location, price, surface area, parking)
-- 💾 **Persistent Storage** - MongoDB database for historical analysis and trend tracking
-- 📊 **Interactive Dashboard** - Real-time visualizations of property listings and market trends
-- 🤖 **Airflow Orchestration** - Scheduled scraping jobs with configurable intervals
-- 📱 **Telegram Notifications** - Instant alerts for new listings and price changes
-- 💱 **Currency Conversion** - Automatic ARS/USD conversion with validation
-- 🏗️ **Modular Architecture** - FastAPI backend + React frontend + Nginx reverse proxy
-- 🐳 **Fully Dockerized** - One-command deployment with docker-compose
+El sistema sigue un modelo de dos planos:
 
-## 🛠️ Tech Stack
+**Plano de control — Prefect Cloud**
+Maneja el scheduling, la UI, los logs y las alertas sin que ningún dato pase por ahí. El tier gratuito es suficiente para esta carga.
 
-- **Backend:** Python, FastAPI, BeautifulSoup4, Requests
-- **Database:** MongoDB Atlas
-- **Orchestration:** Apache Airflow 2.8.1
-- **Frontend:** React.js
-- **Web Server:** Nginx
-- **Notifications:** Telegram Bot API
-- **Infrastructure:** Docker, Docker Compose
+**Plano de datos — servidor local (PC de escritorio 24/7)**
+- **Spiders** (Scrapy + Playwright): scrapean los cuatro sitios y normalizan las publicaciones en Python antes de persistirlas.
+- **dbt**: transforma los datos crudos en modelos listos para análisis, corre tests y genera documentación.
+- **Prefect worker**: consulta Prefect Cloud por runs programados y los ejecuta localmente.
 
-## 📋 Use Case
+**Almacenamiento — Neon Postgres (serverless cloud)**
+Dos schemas: `raw` (salida de los spiders) y `analytics` (transformado por dbt). Escala a cero entre ejecuciones.
 
-Ideal for apartment hunters in Greater Buenos Aires who want to be the first to know about new listings matching their exact requirements, without manually checking MercadoLibre multiple times per day.
+## ✨ Funcionalidades
+
+- 🔍 **Scraping multi-sitio** - Cubre ZonaProp, ArgenProp, MercadoLibre y Properati con filtros personalizados (ubicación, precio, superficie, cochera)
+- 🎭 **Scrapy + Playwright** - Maneja páginas estáticas y renderizadas con JavaScript
+- 💾 **Almacenamiento en dos capas** - Schemas raw y analytics en Neon Postgres para trazabilidad completa
+- 🔄 **Transformaciones con dbt** - Modelos tipados, tests y documentación autogenerada sobre los datos crudos
+- 🤖 **Orquestación con Prefect** - Prefect Cloud como plano de control; el worker corre localmente y los datos nunca salen del servidor
+- 📱 **Notificaciones por Telegram** - Alertas instantáneas ante nuevas publicaciones o cambios de precio
+- 💱 **Conversión de moneda** - Conversión automática ARS/USD con validación
+
+## 🛠️ Stack tecnológico
+
+- **Scraping:** Python, Scrapy, Playwright
+- **Base de datos:** Neon Postgres (serverless) — schemas `raw` + `analytics`
+- **Transformaciones:** dbt
+- **Orquestación:** Prefect 2 (Prefect Cloud como control plane + worker local)
+- **Notificaciones:** Telegram Bot API
+
+## 📋 Caso de uso
+
+Ideal para quienes buscan departamento en el Gran Buenos Aires y quieren ser los primeros en enterarse de nuevas publicaciones que cumplan sus requisitos exactos, sin tener que revisar manualmente varios portales inmobiliarios varias veces al día.
