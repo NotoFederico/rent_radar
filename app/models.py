@@ -1,227 +1,135 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, ClassVar
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class EventType(str, Enum):
-	"""Tipos de evento del pipeline."""
-
-	NEW = "NEW"
-	PRICE_UP = "PRICE_UP"
-	PRICE_DOWN = "PRICE_DOWN"
-	OFF_MARKET = "OFF_MARKET"
+    NEW = "NEW"
+    PRICE_UP = "PRICE_UP"
+    PRICE_DOWN = "PRICE_DOWN"
+    OFF_MARKET = "OFF_MARKET"
 
 
 class NotificationType(str, Enum):
-	"""Tipos de notificacion soportados por la app."""
-
-	LISTING_UPDATE = "LISTING_UPDATE"
-	APP_HEALTH = "APP_HEALTH"
+    LISTING_UPDATE = "LISTING_UPDATE"
+    APP_HEALTH = "APP_HEALTH"
 
 
-class MongoModel(BaseModel):
-	"""Base comun para modelos persistidos en MongoDB."""
+class Listing(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
 
-	model_config = ConfigDict(
-		populate_by_name=True,
-		extra="forbid",
-		use_enum_values=True,
-	)
-	mongo_required: ClassVar[list[str]] = []
-	mongo_properties: ClassVar[dict[str, dict[str, Any]]] = {}
+    source: str
+    listing_id: str
+    url: str
+    title: str
+    price: int | None = None
+    currency: str | None = None
+    expenses: int | None = None
+    location: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    rooms: int | None = None
+    bedrooms: int | None = None
+    bathrooms: int | None = None
+    surface_m2: int | None = None
+    published_at: datetime | None = None
+    scraped_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    seller: str | None = None
+    specifications: list[str] = Field(default_factory=list)
 
-	@classmethod
-	def mongo_validator(cls) -> dict[str, Any]:
-		"""Retorna el esquema jsonSchema de Mongo para la colección."""
-		properties = {"_id": {}, **cls.mongo_properties}
-		return {
-			"$jsonSchema": {
-				"bsonType": "object",
-				"required": cls.mongo_required,
-				"additionalProperties": False,
-				"properties": properties,
-			}
-		}
-
-	def to_mongo_doc(self) -> dict[str, Any]:
-		"""Serializa usando aliases de MongoDB."""
-		return self.model_dump(by_alias=True)
-
-
-class Listing(MongoModel):
-	"""Publicacion normalizada para usar en Python."""
-
-	source: str = Field(serialization_alias="fuente")
-	listing_id: str = Field(serialization_alias="id_publicacion")
-	url: str
-	title: str = Field(serialization_alias="titulo")
-	price: float | None = Field(default=None, serialization_alias="precio")
-	currency: str | None = Field(default=None, serialization_alias="moneda")
-	expenses: float | None = Field(default=None, serialization_alias="expensas")
-	location: str | None = Field(default=None, serialization_alias="ubicacion")
-	latitude: float | None = Field(default=None, serialization_alias="latitud")
-	longitude: float | None = Field(default=None, serialization_alias="longitud")
-	rooms: float | None = Field(default=None, serialization_alias="ambientes")
-	bedrooms: float | None = Field(default=None, serialization_alias="dormitorios")
-	bathrooms: float | None = Field(default=None, serialization_alias="banos")
-	surface_m2: float | None = Field(default=None, serialization_alias="superficie_m2")
-	published_at: datetime | None = Field(default=None, serialization_alias="publicado_en")
-	scraped_at: datetime = Field(default_factory=datetime.utcnow, serialization_alias="fecha_scraping")
-	seller: str | None = Field(default=None, serialization_alias="vendedor")
-	specifications: list[str] = Field(default_factory=list, serialization_alias="especificaciones")
-
-	mongo_required: ClassVar[list[str]] = [
-		"id_ejecucion",
-		"fuente",
-		"id_publicacion",
-		"url",
-		"titulo",
-		"fecha_scraping",
-	]
-	mongo_properties: ClassVar[dict[str, dict[str, Any]]] = {
-		"id_ejecucion": {"bsonType": "string"},
-		"fuente": {"bsonType": "string"},
-		"id_publicacion": {"bsonType": "string"},
-		"url": {"bsonType": "string"},
-		"titulo": {"bsonType": "string"},
-		"precio": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"moneda": {"bsonType": ["string", "null"]},
-		"expensas": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"ubicacion": {"bsonType": ["string", "null"]},
-		"latitud": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"longitud": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"ambientes": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"dormitorios": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"banos": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"superficie_m2": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"publicado_en": {"bsonType": ["date", "null"]},
-		"fecha_scraping": {"bsonType": "date"},
-		"vendedor": {"bsonType": ["string", "null"]},
-		"especificaciones": {"bsonType": "array", "items": {"bsonType": "string"}},
-	}
-
-	def to_snapshot_row(self, run_id: str) -> dict[str, Any]:
-		"""Mapea el modelo."""
-		row = self.to_mongo_doc()
-		row["id_ejecucion"] = run_id
-		return row
+    def to_snapshot_row(self, run_id: str) -> dict[str, Any]:
+        return {
+            "id_ejecucion": run_id,
+            "fuente": self.source,
+            "id_publicacion": self.listing_id,
+            "url": self.url,
+            "titulo": self.title,
+            "precio": self.price,
+            "moneda": self.currency,
+            "expensas": self.expenses,
+            "ubicacion": self.location,
+            "latitud": self.latitude,
+            "longitud": self.longitude,
+            "ambientes": self.rooms,
+            "dormitorios": self.bedrooms,
+            "banos": self.bathrooms,
+            "superficie_m2": self.surface_m2,
+            "publicado_en": self.published_at,
+            "fecha_scraping": self.scraped_at,
+            "vendedor": self.seller,
+            "especificaciones": self.specifications,
+        }
 
 
-class PipelineRun(MongoModel):
-	"""Metadatos."""
+class PipelineRun(BaseModel):
+    source: str
+    status: str = "running"
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    finished_at: datetime | None = None
+    listings_found: int = 0
+    run_id: str = Field(default_factory=lambda: str(uuid4()))
 
-	source: str = Field(serialization_alias="fuente")
-	status: str = Field(default="running", serialization_alias="estado")
-	started_at: datetime = Field(default_factory=datetime.utcnow, serialization_alias="iniciado_en")
-	finished_at: datetime | None = Field(default=None, serialization_alias="finalizado_en")
-	listings_found: int = Field(default=0, serialization_alias="total_publicaciones")
-	run_id: str = Field(default_factory=lambda: str(uuid4()), serialization_alias="id_ejecucion")
-
-	mongo_required: ClassVar[list[str]] = [
-		"id_ejecucion",
-		"fuente",
-		"iniciado_en",
-		"estado",
-		"total_publicaciones",
-	]
-	mongo_properties: ClassVar[dict[str, dict[str, Any]]] = {
-		"id_ejecucion": {"bsonType": "string"},
-		"fuente": {"bsonType": "string"},
-		"iniciado_en": {"bsonType": "date"},
-		"finalizado_en": {"bsonType": ["date", "null"]},
-		"estado": {"bsonType": "string"},
-		"total_publicaciones": {"bsonType": "int"},
-	}
-
-	def to_run_row(self) -> dict[str, Any]:
-		"""Mapea la corrida a columnas en español."""
-		return self.to_mongo_doc()
+    def to_run_row(self) -> dict[str, Any]:
+        return {
+            "id_ejecucion": self.run_id,
+            "fuente": self.source,
+            "estado": self.status,
+            "iniciado_en": self.started_at,
+            "finalizado_en": self.finished_at,
+            "total_publicaciones": self.listings_found,
+        }
 
 
-class Event(MongoModel):
-	"""Cambio detectado entre snapshots para usar en Python."""
+class Event(BaseModel):
+    run_id: str
+    source: str
+    listing_id: str
+    event_type: EventType
+    title: str
+    url: str
+    old_price: int | None = None
+    new_price: int | None = None
+    detected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    notified: bool = False
+    event_id: str = Field(default_factory=lambda: str(uuid4()))
 
-	run_id: str = Field(serialization_alias="id_ejecucion")
-	source: str = Field(serialization_alias="fuente")
-	listing_id: str = Field(serialization_alias="id_publicacion")
-	event_type: EventType = Field(serialization_alias="tipo_evento")
-	title: str = Field(serialization_alias="titulo")
-	url: str
-	old_price: float | None = Field(default=None, serialization_alias="precio_anterior")
-	new_price: float | None = Field(default=None, serialization_alias="precio_nuevo")
-	detected_at: datetime = Field(default_factory=datetime.utcnow, serialization_alias="detectado_en")
-	notified: bool = Field(default=False, serialization_alias="fue_notificado")
-	event_id: str = Field(default_factory=lambda: str(uuid4()), serialization_alias="id_evento")
-
-	mongo_required: ClassVar[list[str]] = [
-		"id_evento",
-		"id_ejecucion",
-		"fuente",
-		"id_publicacion",
-		"tipo_evento",
-		"detectado_en",
-		"url",
-		"titulo",
-		"fue_notificado",
-	]
-	mongo_properties: ClassVar[dict[str, dict[str, Any]]] = {
-		"id_evento": {"bsonType": "string"},
-		"id_ejecucion": {"bsonType": "string"},
-		"fuente": {"bsonType": "string"},
-		"id_publicacion": {"bsonType": "string"},
-		"tipo_evento": {"enum": [e.value for e in EventType]},
-		"precio_anterior": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"precio_nuevo": {"bsonType": ["double", "int", "long", "decimal", "null"]},
-		"detectado_en": {"bsonType": "date"},
-		"url": {"bsonType": "string"},
-		"titulo": {"bsonType": "string"},
-		"fue_notificado": {"bsonType": "bool"},
-	}
-
-	def to_event_row(self) -> dict[str, Any]:
-		"""Mapea el evento a columnas en español."""
-		return self.to_mongo_doc()
+    def to_event_row(self) -> dict[str, Any]:
+        return {
+            "id_evento": self.event_id,
+            "id_ejecucion": self.run_id,
+            "fuente": self.source,
+            "id_publicacion": self.listing_id,
+            "tipo_evento": self.event_type,
+            "titulo": self.title,
+            "url": self.url,
+            "precio_anterior": self.old_price,
+            "precio_nuevo": self.new_price,
+            "detectado_en": self.detected_at,
+            "fue_notificado": self.notified,
+        }
 
 
-class Notification(MongoModel):
-	"""Registro de envio por canal para usar en Python."""
+class Notification(BaseModel):
+    event_id: str | None = None
+    channel: str
+    notification_type: NotificationType = NotificationType.LISTING_UPDATE
+    notified_ids: list[str] = Field(default_factory=list)
+    message: str | None = None
+    status: str = "sent"
+    sent_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-	event_id: str | None = Field(default=None, serialization_alias="id_evento")
-	channel: str = Field(serialization_alias="canal")
-	notification_type: NotificationType = Field(
-		default=NotificationType.LISTING_UPDATE,
-		serialization_alias="tipo_notificacion",
-	)
-	notified_ids: list[str] = Field(default_factory=list, serialization_alias="ids_notificados")
-	message: str | None = Field(default=None, serialization_alias="mensaje")
-	status: str = Field(default="sent", serialization_alias="estado")
-	sent_at: datetime = Field(default_factory=datetime.utcnow, serialization_alias="enviado_en")
-
-	mongo_required: ClassVar[list[str]] = [
-		"canal",
-		"tipo_notificacion",
-		"ids_notificados",
-		"enviado_en",
-		"estado",
-	]
-	mongo_properties: ClassVar[dict[str, dict[str, Any]]] = {
-		"id_evento": {"bsonType": ["string", "null"]},
-		"canal": {"bsonType": "string"},
-		"tipo_notificacion": {"enum": [e.value for e in NotificationType]},
-		"ids_notificados": {
-			"bsonType": "array",
-			"items": {"bsonType": "string"},
-		},
-		"mensaje": {"bsonType": ["string", "null"]},
-		"enviado_en": {"bsonType": "date"},
-		"estado": {"bsonType": "string"},
-	}
-
-	def to_notification_row(self) -> dict[str, Any]:
-		"""Mapea la notificacion a columnas en español."""
-		return self.to_mongo_doc()
+    def to_notification_row(self) -> dict[str, Any]:
+        return {
+            "id_evento": self.event_id,
+            "canal": self.channel,
+            "tipo_notificacion": self.notification_type,
+            "ids_notificados": self.notified_ids,
+            "mensaje": self.message,
+            "estado": self.status,
+            "enviado_en": self.sent_at,
+        }

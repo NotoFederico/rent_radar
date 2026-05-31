@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -9,6 +10,7 @@ from typing import Iterable
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 
 from app.models import Listing
 
@@ -21,14 +23,14 @@ _UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
-_STEALTH_SCRIPT = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
 
 
 @dataclass(slots=True)
 class SpiderConfig:
     request_timeout: int = 30
     max_pages: int = 3
-    delay_between_requests: float = 2.4
+    delay_min: float = 4.0
+    delay_max: float = 9.0
 
 
 class MercadoLibreSpider:
@@ -37,17 +39,14 @@ class MercadoLibreSpider:
     def __init__(self, config: SpiderConfig | None = None):
         self.config = config or SpiderConfig()
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        self._browser = self._pw.chromium.launch(headless=True)
         self._ctx = self._browser.new_context(
             user_agent=_UA,
             locale="es-AR",
             viewport={"width": 1366, "height": 768},
         )
-        self._ctx.add_init_script(_STEALTH_SCRIPT)
         self._page = self._ctx.new_page()
+        Stealth().apply_stealth_sync(self._page)
 
     def close(self) -> None:
         try:
@@ -73,21 +72,23 @@ class MercadoLibreSpider:
                 listing = self._parse_listing(detail_url)
                 if listing is not None:
                     results.append(listing)
+                    print(f"\r  mercadolibre: {len(results)} publicaciones...", end="", flush=True)
             logger.info("Scrape completado | url=%s | nuevas=%d", start_url, len(results) - before)
+        print()
         if not results:
             logger.warning("Se obtuvieron 0 publicaciones en total. Revisar selectores o bloqueo HTTP.")
         return results
 
     def _iter_detail_urls(self, start_url: str) -> Iterable[str]:
         all_urls: list[str] = []
-        soup = self._navigate(start_url)
+        soup = self._navigate_search(start_url)
         for page_num in range(1, self.config.max_pages + 1):
             if soup is None:
                 logger.warning("No se pudo obtener pagina %d", page_num)
                 break
 
             seen_links: set[str] = set()
-            for node in soup.select("li.ui-search-layout__item a.poly-component__title"):
+            for node in soup.select("a.poly-component__title"):
                 href = node.get("href")
                 if href and href not in seen_links:
                     seen_links.add(href)
@@ -109,10 +110,13 @@ class MercadoLibreSpider:
         return all_urls
 
     def _click_next_page(self, page_num: int) -> BeautifulSoup | None:
-        time.sleep(self.config.delay_between_requests)
+        self._delay()
         try:
             self._page.click("[data-andes-pagination-control='next']")
-            self._page.wait_for_load_state("domcontentloaded")
+            try:
+                self._page.wait_for_selector("a.poly-component__title", timeout=15_000)
+            except Exception:
+                self._page.wait_for_timeout(3_000)
             logger.info("Paginacion: click en Siguiente desde pagina %d | nueva url=%s", page_num, self._page.url)
             return BeautifulSoup(self._page.content(), "html.parser")
         except Exception as exc:
@@ -159,13 +163,37 @@ class MercadoLibreSpider:
             specifications=self._extract_specifications(soup),
         )
 
-    def _navigate(self, url: str) -> BeautifulSoup | None:
-        time.sleep(self.config.delay_between_requests)
+    def _delay(self) -> None:
+        time.sleep(random.uniform(self.config.delay_min, self.config.delay_max))
+
+    def _navigate_search(self, url: str) -> BeautifulSoup | None:
+        """Navega a una página de resultados y espera que React renderice los cards."""
+        self._delay()
         try:
             resp = self._page.goto(url, timeout=self.config.request_timeout * 1000, wait_until="domcontentloaded")
             if resp and resp.status >= 400:
                 logger.error("HTTP %d al pedir %s", resp.status, url)
                 return None
+            try:
+                self._page.wait_for_selector("a.poly-component__title", timeout=15_000)
+            except Exception:
+                logger.debug("wait_for_selector timeout, usando espera fija")
+                self._page.wait_for_timeout(3_000)
+            return BeautifulSoup(self._page.content(), "html.parser")
+        except Exception as exc:
+            logger.error("Error navegando a %s: %s", url, exc)
+            return None
+
+    def _navigate(self, url: str) -> BeautifulSoup | None:
+        self._delay()
+        try:
+            resp = self._page.goto(url, timeout=self.config.request_timeout * 1000, wait_until="domcontentloaded")
+            if resp and resp.status >= 400:
+                logger.error("HTTP %d al pedir %s", resp.status, url)
+                return None
+            # Simula lectura: scroll suave + pausa antes de extraer
+            self._page.evaluate(f"window.scrollBy(0, {random.randint(200, 600)})")
+            self._page.wait_for_timeout(random.randint(800, 1800))
             logger.debug("HTTP %d | url=%s", resp.status if resp else 0, url)
             return BeautifulSoup(self._page.content(), "html.parser")
         except Exception as exc:

@@ -45,6 +45,8 @@ class ZonapropSpider:
                 listing = self._parse_listing(detail_url, seed)
                 if listing is not None:
                     results.append(listing)
+                    print(f"\r  zonaprop: {len(results)} publicaciones...", end="", flush=True)
+        print()
         return results
 
     def _iter_detail_urls(self, start_url: str) -> Iterable[tuple[str, dict[str, float | str | None]]]:

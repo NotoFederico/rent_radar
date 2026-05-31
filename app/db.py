@@ -1,108 +1,182 @@
 from __future__ import annotations
 
 from typing import Any, Iterable
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
-from app.config import MONGO_URI, DB_NAME, RUNS_COLLECTION, SNAPSHOTS_COLLECTION, EVENTS_COLLECTION, NOTIFICATIONS_COLLECTION
+
+import psycopg2
+import psycopg2.extras
+
+from app.config import NEON_DATABASE_URL
 
 
 class ScraperDB:
-	"""Acceso a MongoDB del proyecto."""
+    def __init__(self) -> None:
+        self.conn = self._connect()
 
-	def __init__(self):
-		"""Conecta a MongoDB Cloud."""
-		try:
-			self.client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-			# Verifica la conexión
-			self.client.admin.command("ping")
-			self.db = self.client[DB_NAME]
-		except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-			raise ConnectionError(f"No se pudo conectar a MongoDB: {e}")
+    def _connect(self) -> psycopg2.extensions.connection:
+        conn = psycopg2.connect(
+            NEON_DATABASE_URL,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+        psycopg2.extras.register_uuid(conn)
+        return conn
 
-	def close(self) -> None:
-		"""Cierra la conexion activa."""
-		if self.client:
-			self.client.close()
+    def _ensure_connected(self) -> None:
+        if self.conn.closed:
+            self.conn = self._connect()
 
-	def initialize(self) -> None:
-		"""Crea las colecciones e índices base del proyecto. Actualiza los validators si ya existen."""
-		from app.models import Listing, PipelineRun, Event, Notification
+    def initialize(self) -> None:
+        pass
 
-		existing = set(self.db.list_collection_names())
+    def close(self) -> None:
+        if not self.conn.closed:
+            self.conn.close()
 
-		for name, model_cls in (
-			(RUNS_COLLECTION, PipelineRun),
-			(SNAPSHOTS_COLLECTION, Listing),
-			(EVENTS_COLLECTION, Event),
-			(NOTIFICATIONS_COLLECTION, Notification),
-		):
-			validator = model_cls.mongo_validator()
-			if name not in existing:
-				self.db.create_collection(name, validator=validator)
-			else:
-				self.db.command("collMod", name, validator=validator)
-		
-		# Crear índices para optimización
-		self.db[RUNS_COLLECTION].create_index("id_ejecucion", unique=True)
-		self.db[RUNS_COLLECTION].create_index("fuente")
-		self.db[RUNS_COLLECTION].create_index("iniciado_en")
-		
-		self.db[SNAPSHOTS_COLLECTION].create_index("id_ejecucion")
-		self.db[SNAPSHOTS_COLLECTION].create_index("id_publicacion")
-		
-		self.db[EVENTS_COLLECTION].create_index("id_evento", unique=True)
-		self.db[EVENTS_COLLECTION].create_index("id_ejecucion")
-		self.db[EVENTS_COLLECTION].create_index("fuente")
-		self.db[EVENTS_COLLECTION].create_index("fue_notificado")
-		
-		self.db[NOTIFICATIONS_COLLECTION].create_index("id_evento")
+    def commit(self) -> None:
+        self.conn.commit()
 
-	
-	def insert_run(self, run_data: dict[str, Any]) -> None:
-		"""Guarda una corrida."""
-		self.db[RUNS_COLLECTION].insert_one(run_data)
+    # ------------------------------------------------------------------ writes
 
-	def insert_snapshots(self, rows: Iterable[dict[str, Any]]) -> None:
-		"""Guarda publicaciones de una corrida."""
-		records = list(rows)
-		if not records:
-			return
-		self.db[SNAPSHOTS_COLLECTION].insert_many(records)
+    def insert_run(self, row: dict[str, Any]) -> None:
+        self._ensure_connected()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO raw.pipeline_runs
+                    (id_ejecucion, fuente, estado, iniciado_en, finalizado_en, total_publicaciones)
+                VALUES
+                    (%(id_ejecucion)s, %(fuente)s, %(estado)s, %(iniciado_en)s,
+                     %(finalizado_en)s, %(total_publicaciones)s)
+                ON CONFLICT (id_ejecucion) DO UPDATE
+                    SET estado               = EXCLUDED.estado,
+                        finalizado_en        = EXCLUDED.finalizado_en,
+                        total_publicaciones  = EXCLUDED.total_publicaciones
+                """,
+                row,
+            )
+        self.conn.commit()
 
-	def insert_events(self, rows: Iterable[dict[str, Any]]) -> None:
-		"""Guarda eventos detectados."""
-		records = list(rows)
-		if not records:
-			return
-		self.db[EVENTS_COLLECTION].insert_many(records)
+    def insert_snapshots(self, rows: Iterable[dict[str, Any]]) -> None:
+        records = list(rows)
+        if not records:
+            return
+        self._ensure_connected()
+        with self.conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO raw.snapshots
+                    (id_ejecucion, fuente, id_publicacion, url, titulo, precio, moneda,
+                     expensas, ubicacion, latitud, longitud, ambientes, dormitorios,
+                     banos, superficie_m2, publicado_en, fecha_scraping, vendedor, especificaciones)
+                VALUES %s
+                """,
+                [
+                    (
+                        r["id_ejecucion"], r["fuente"], r["id_publicacion"], r["url"],
+                        r["titulo"], r.get("precio"), r.get("moneda"), r.get("expensas"),
+                        r.get("ubicacion"), r.get("latitud"), r.get("longitud"),
+                        r.get("ambientes"), r.get("dormitorios"), r.get("banos"),
+                        r.get("superficie_m2"), r.get("publicado_en"), r.get("fecha_scraping"),
+                        r.get("vendedor"), r.get("especificaciones", []),
+                    )
+                    for r in records
+                ],
+            )
+        self.conn.commit()
 
-	def insert_notifications(self, rows: Iterable[dict[str, Any]]) -> None:
-		"""Guarda el log de notificaciones."""
-		records = list(rows)
-		if not records:
-			return
-		self.db[NOTIFICATIONS_COLLECTION].insert_many(records)
+    def insert_events(self, rows: Iterable[dict[str, Any]]) -> None:
+        records = list(rows)
+        if not records:
+            return
+        self._ensure_connected()
+        with self.conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO raw.events
+                    (id_evento, id_ejecucion, fuente, id_publicacion, tipo_evento,
+                     titulo, url, precio_anterior, precio_nuevo, detectado_en, fue_notificado)
+                VALUES %s
+                ON CONFLICT (id_evento) DO NOTHING
+                """,
+                [
+                    (
+                        r["id_evento"], r["id_ejecucion"], r["fuente"], r["id_publicacion"],
+                        r["tipo_evento"], r["titulo"], r["url"],
+                        r.get("precio_anterior"), r.get("precio_nuevo"),
+                        r["detectado_en"], r.get("fue_notificado", False),
+                    )
+                    for r in records
+                ],
+            )
+        self.conn.commit()
 
-	def get_latest_run(self, source: str) -> dict[str, Any] | None:
-		"""Trae la ultima corrida de una fuente."""
-		return self.db[RUNS_COLLECTION].find_one(
-			{"fuente": source},
-			sort=[("iniciado_en", -1)]
-		)
+    def insert_notifications(self, rows: Iterable[dict[str, Any]]) -> None:
+        records = list(rows)
+        if not records:
+            return
+        self._ensure_connected()
+        with self.conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO raw.notifications
+                    (id_evento, canal, tipo_notificacion, ids_notificados, mensaje, estado, enviado_en)
+                VALUES %s
+                """,
+                [
+                    (
+                        r.get("id_evento"), r["canal"], r["tipo_notificacion"],
+                        r.get("ids_notificados", []), r.get("mensaje"),
+                        r.get("estado", "sent"), r["enviado_en"],
+                    )
+                    for r in records
+                ],
+            )
+        self.conn.commit()
 
-	def get_run_snapshots(self, run_id: str) -> list[dict[str, Any]]:
-		"""Trae las publicaciones de una corrida."""
-		return list(self.db[SNAPSHOTS_COLLECTION].find(
-			{"id_ejecucion": run_id}
-		))
+    # ------------------------------------------------------------------ reads
 
-	def mark_event_as_notified(self, event_id: str) -> None:
-		"""Marca un evento como ya notificado."""
-		self.db[EVENTS_COLLECTION].update_one(
-			{"id_evento": event_id},
-			{"$set": {"fue_notificado": True}}
-		)
+    def get_latest_run(self, source: str) -> dict[str, Any] | None:
+        self._ensure_connected()
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT * FROM raw.pipeline_runs
+                WHERE fuente = %s
+                ORDER BY iniciado_en DESC
+                LIMIT 1
+                """,
+                (source,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
 
-	def commit(self) -> None:
-		"""Método para compatibilidad. MongoDB confirma automáticamente."""
-		pass
+    def get_run_snapshots(self, run_id: str) -> list[dict[str, Any]]:
+        self._ensure_connected()
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM raw.snapshots WHERE id_ejecucion = %s",
+                (run_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_pending_events(self) -> list[dict[str, Any]]:
+        self._ensure_connected()
+        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM raw.events WHERE fue_notificado = FALSE ORDER BY detectado_en"
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+    def mark_event_as_notified(self, event_id: str) -> None:
+        self._ensure_connected()
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE raw.events SET fue_notificado = TRUE WHERE id_evento = %s",
+                (event_id,),
+            )
+        self.conn.commit()

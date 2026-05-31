@@ -1,6 +1,9 @@
 venv/
 .env
-.claude
+.claude/
 __pycache__/
 *.pyc
 *.egg-info/
+.pytest_cache/
+dist/
+.DS_Store
