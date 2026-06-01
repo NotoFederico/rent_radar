@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,8 @@ import requests
 from bs4 import BeautifulSoup
 
 from app.models import Listing
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -42,12 +45,17 @@ class ArgenpropSpider:
     def scrape(self, start_urls: Iterable[str]) -> list[Listing]:
         results: list[Listing] = []
         for start_url in start_urls:
+            logger.info("Iniciando scrape | url=%s", start_url)
+            before = len(results)
             for detail_url, seed in self._iter_detail_urls(start_url):
                 listing = self._parse_listing(detail_url, seed)
                 if listing is not None:
                     results.append(listing)
                     print(f"\r  argenprop: {len(results)} publicaciones...", end="", flush=True)
+            logger.info("Scrape completado | url=%s | nuevas=%d", start_url, len(results) - before)
         print()
+        if not results:
+            logger.warning("Se obtuvieron 0 publicaciones en total. Revisar selectores o bloqueo HTTP.")
         return results
 
     def _iter_detail_urls(self, start_url: str) -> Iterable[tuple[str, dict[str, float | str | None]]]:
@@ -56,9 +64,13 @@ class ArgenpropSpider:
         for _ in range(self.config.max_pages):
             soup = self._get_soup(current_url)
             if soup is None:
+                logger.warning("No se pudo obtener pagina %d", current_page)
                 return
 
             cards = soup.select("div.listing__item")
+            if not cards:
+                logger.warning("Pagina %d: ningun selector matcheo publicaciones", current_page)
+            logger.info("Pagina %d: %d publicaciones encontradas", current_page, len(cards))
             for card in cards:
                 link = card.select_one("a.card")
                 if link is None:
@@ -86,6 +98,7 @@ class ArgenpropSpider:
 
             next_page_url = self._resolve_next_page_url(soup, current_url, current_page)
             if not next_page_url:
+                logger.debug("Sin pagina siguiente, finalizando en pagina %d.", current_page)
                 return
             current_url = next_page_url
             current_page += 1
@@ -170,8 +183,10 @@ class ArgenpropSpider:
         try:
             response = self.session.get(url, timeout=self.config.request_timeout)
             response.raise_for_status()
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            logger.error("Error al pedir %s: %s", url, exc)
             return None
+        logger.debug("HTTP %d | url=%s", response.status_code, url)
         return BeautifulSoup(response.text, "html.parser")
 
     @staticmethod

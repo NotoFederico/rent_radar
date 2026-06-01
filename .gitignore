@@ -7,3 +7,5 @@ __pycache__/
 .pytest_cache/
 dist/
 .DS_Store
+logs/
+nohup.out

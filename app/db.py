@@ -26,6 +26,16 @@ class ScraperDB:
     def _ensure_connected(self) -> None:
         if self.conn.closed:
             self.conn = self._connect()
+            return
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        except Exception:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = self._connect()
 
     def initialize(self) -> None:
         pass

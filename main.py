@@ -4,7 +4,6 @@ import argparse
 import logging
 from datetime import UTC, datetime
 from importlib.metadata import version
-from pathlib import Path
 
 from app.db import ScraperDB
 from app.models import Event, EventType, Listing, Notification, PipelineRun

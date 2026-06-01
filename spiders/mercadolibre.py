@@ -29,8 +29,8 @@ _UA = (
 class SpiderConfig:
     request_timeout: int = 30
     max_pages: int = 3
-    delay_min: float = 4.0
-    delay_max: float = 9.0
+    delay_min: float = 3.0
+    delay_max: float = 7.0
 
 
 class MercadoLibreSpider:
@@ -38,6 +38,7 @@ class MercadoLibreSpider:
 
     def __init__(self, config: SpiderConfig | None = None):
         self.config = config or SpiderConfig()
+        logger.info("Iniciando navegador (Playwright/Chromium)...")
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=True)
         self._ctx = self._browser.new_context(
@@ -47,6 +48,7 @@ class MercadoLibreSpider:
         )
         self._page = self._ctx.new_page()
         Stealth().apply_stealth_sync(self._page)
+        logger.info("Navegador listo")
 
     def close(self) -> None:
         try:
@@ -168,12 +170,15 @@ class MercadoLibreSpider:
 
     def _navigate_search(self, url: str) -> BeautifulSoup | None:
         """Navega a una página de resultados y espera que React renderice los cards."""
+        logger.info("Esperando delay anti-bot antes de cargar busqueda...")
         self._delay()
+        logger.info("Cargando pagina de busqueda...")
         try:
             resp = self._page.goto(url, timeout=self.config.request_timeout * 1000, wait_until="domcontentloaded")
             if resp and resp.status >= 400:
                 logger.error("HTTP %d al pedir %s", resp.status, url)
                 return None
+            logger.info("Pagina cargada (HTTP %d), esperando publicaciones...", resp.status if resp else 0)
             try:
                 self._page.wait_for_selector("a.poly-component__title", timeout=15_000)
             except Exception:
@@ -185,6 +190,7 @@ class MercadoLibreSpider:
             return None
 
     def _navigate(self, url: str) -> BeautifulSoup | None:
+        logger.debug("Navegando a detalle: %s", url)
         self._delay()
         try:
             resp = self._page.goto(url, timeout=self.config.request_timeout * 1000, wait_until="domcontentloaded")

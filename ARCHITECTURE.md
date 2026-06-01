@@ -10,25 +10,25 @@ flowchart LR
 
     subgraph local["Servidor local · 24/7"]
         direction LR
-        SPD["Scrapy + Playwright"]
-        FX["Conversión\nARS / USD"]
-        DBT["dbt\nTransform · Tests · Docs"]
+        SPD["Spiders\nPlaywright · curl_cffi · requests"]
+        DBT["dbt\nSilver · Gold"]
         BOT["Telegram Bot"]
     end
 
     subgraph neon["Neon Postgres · serverless"]
         direction TB
         RAW[("raw")]
-        ANA[("analytics")]
+        SIL[("silver")]
+        GOL[("gold")]
     end
 
     PC(["Prefect Cloud\nScheduling · UI · Logs"])
     USER["Usuario\n📱 Telegram"]
 
     ZP & AP & ML --> SPD
-    SPD --> FX --> RAW
-    RAW --> DBT --> ANA
-    ANA --> BOT --> USER
+    SPD --> RAW
+    RAW --> DBT --> SIL --> GOL
+    GOL --> BOT --> USER
 
     PC -. programa .-> local
 
@@ -39,8 +39,8 @@ flowchart LR
     classDef user      fill:#ffe4e6,stroke:#e11d48,color:#881337
 
     class ZP,AP,ML portal
-    class SPD,FX,DBT,BOT proceso
-    class RAW,ANA db
+    class SPD,DBT,BOT proceso
+    class RAW,SIL,GOL db
     class PC cloud
     class USER user
 ```

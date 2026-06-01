@@ -6,66 +6,82 @@ Sistema automatizado que monitorea publicaciones de alquiler en múltiples porta
 
 - [🎯 Descripción](#-descripción)
 - [🏗️ Arquitectura](#-arquitectura)
-- [✨ Funcionalidades](#-funcionalidades)
+- [✨ Estado actual](#-estado-actual)
 - [🛠️ Stack tecnológico](#-stack-tecnológico)
 - [🚀 Instalación](#-instalación)
+- [▶️ Uso](#-uso)
 - [📋 Caso de uso](#-caso-de-uso)
 
 ---
 
 ## 🎯 Descripción
 
-Rent Radar scrapea publicaciones de alquiler de ZonaProp, ArgenProp y MercadoLibre, normaliza y guarda los datos crudos en Neon Postgres, los transforma con dbt, y te avisa al instante cuando aparece una propiedad que cumple tus criterios. El pipeline corre en un servidor local orquestado desde Prefect Cloud.
+Rent Radar scrapea publicaciones de alquiler de ZonaProp, ArgenProp y MercadoLibre, normaliza y guarda los datos crudos en Neon Postgres, los transforma con dbt, y envía alertas cuando aparece una propiedad que cumple tus criterios. El pipeline corre en un servidor local y será orquestado desde Prefect Cloud.
 
 ## 🏗️ Arquitectura
 
-El sistema sigue un modelo de dos planos:
+**Plano de control — Prefect Cloud** *(pendiente)*  
+Manejará el scheduling, la UI y los logs sin que ningún dato pase por ahí.
 
-**Plano de control — Prefect Cloud**
-Maneja el scheduling, la UI, los logs y las alertas sin que ningún dato pase por ahí. El tier gratuito es suficiente para esta carga.
-
-**Plano de datos — servidor local (PC de escritorio 24/7)**
-- **Spiders** (Scrapy + Playwright): scrapean los cuatro sitios y normalizan las publicaciones en Python antes de persistirlas.
-- **dbt**: transforma los datos crudos en modelos listos para análisis, corre tests y genera documentación.
-- **Prefect worker**: consulta Prefect Cloud por runs programados y los ejecuta localmente.
+**Plano de datos — servidor local**
+- **Spiders** (Playwright + curl_cffi + requests): scrapean los tres portales y normalizan las publicaciones antes de persistirlas.
+- **dbt**: transforma los datos crudos en modelos listos para análisis. *(en construcción)*
+- **Prefect worker**: consultará Prefect Cloud por runs programados. *(pendiente)*
 
 **Almacenamiento — Neon Postgres (serverless cloud)**
-Dos schemas: `raw` (salida de los spiders) y `analytics` (transformado por dbt). Escala a cero entre ejecuciones.
+Tres schemas: `raw` (salida de los spiders), `silver` (limpieza y enriquecimiento con dbt) y `gold` (agregaciones analíticas).
 
-## ✨ Funcionalidades
+## ✨ Estado actual (v0.2.0)
 
-- 🔍 **Scraping multi-sitio** - Cubre ZonaProp, ArgenProp y MercadoLibre con filtros personalizados (ubicación, precio, superficie, cochera)
-- 🎭 **Scrapy + Playwright** - Maneja páginas estáticas y renderizadas con JavaScript
-- 💾 **Almacenamiento en dos capas** - Schemas raw y analytics en Neon Postgres para trazabilidad completa
-- 🔄 **Transformaciones con dbt** - Modelos tipados, tests y documentación autogenerada sobre los datos crudos
-- 🤖 **Orquestación con Prefect** - Prefect Cloud como plano de control; el worker corre localmente y los datos nunca salen del servidor
-- 📱 **Notificaciones por Telegram** - Alertas instantáneas ante nuevas publicaciones o cambios de precio
-- 💱 **Conversión de moneda** - Conversión automática ARS/USD con validación
+### ✅ Implementado
+
+**Spiders**
+- `mercadolibre.py` — Playwright + playwright-stealth, maneja bot detection, paginación por click
+- `argenprop.py` — HTTP liviano con requests
+- `zonaprop.py` — curl_cffi con impersonación de Chrome para bypassear protecciones
+- Logging estructurado en los tres spiders: progreso por página, conteo de publicaciones, errores de HTTP
+- Delay anti-bot configurable por spider
+
+**Ingesta**
+- `main.py` — CLI con flags `--ingest`, `--source`, `--start-url`, `--max-pages`
+- `run_ingest.py` — corre los tres spiders en paralelo con `threading`, `max_pages` configurado por fuente (zonaprop=10, argenprop=5, mercadolibre=3)
+- Reconexión automática a Neon si la conexión SSL expira durante un scrape largo
+
+**Base de datos**
+- Schema `raw`: tablas `pipeline_runs`, `snapshots`, `events`, `notifications`
+- `raw.snapshots` almacena especificaciones completas de cada portal como array de texto
+
+### 🚧 En construcción
+
+- **Capa silver (dbt)**: modelo `analytics.listados` con extracción de especificaciones, normalización cross-portal, limpieza de precios placeholder, superficie cubierta vs total
+- **Detección de eventos**: comparación entre snapshots para detectar `NEW`, `PRICE_UP`, `PRICE_DOWN`, `OFF_MARKET`
+- **Notificaciones Telegram**
+
+### 📋 Pendiente
+
+- Orquestación con Prefect Cloud
+- Scheduling automático
 
 ## 🛠️ Stack tecnológico
 
-- **Scraping:** Python 3.13, Scrapy, Playwright
-- **Base de datos:** Neon Postgres (serverless) — schemas `raw` + `analytics`
-- **Transformaciones:** dbt
-- **Orquestación:** Prefect 2 (Prefect Cloud como control plane + worker local)
-- **Notificaciones:** Telegram Bot API
+- **Scraping:** Python 3.13, Playwright, curl_cffi, requests, BeautifulSoup4
+- **Base de datos:** Neon Postgres (serverless) — schemas `raw`, `silver`, `gold`
+- **Transformaciones:** dbt-postgres
+- **Orquestación:** Prefect Cloud *(pendiente)*
+- **Notificaciones:** Telegram Bot API *(pendiente)*
 
 ## 🚀 Instalación
 
 ### Requisitos previos
 
 - Python 3.13 (instalado vía [deadsnakes PPA](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa))
-- Node.js >= 18 (requerido por el CLI de Neon)
+- Playwright browsers: `playwright install chromium`
 
 ```bash
 # Python 3.13 en Ubuntu/Debian
 sudo add-apt-repository ppa:deadsnakes/ppa -y
 sudo apt-get update
 sudo apt-get install -y python3.13 python3.13-venv python3.13-dev
-
-# Node.js 22 en Ubuntu/Debian
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-sudo apt-get install -y nodejs
 ```
 
 ### Entorno Python
@@ -74,19 +90,48 @@ sudo apt-get install -y nodejs
 python3.13 -m venv venv
 source venv/bin/activate
 pip install -e .
+playwright install chromium
 ```
 
-Las dependencias se leen del `pyproject.toml`. No se usa `requirements.txt`.
+Las dependencias se leen del `pyproject.toml`.
 
 ### Neon Postgres
 
-Crear y configurar el proyecto de base de datos desde el CLI oficial:
+Crear un proyecto en [neon.tech](https://neon.tech) y correr el schema inicial:
 
 ```bash
-npx neonctl@latest init
+psql $NEON_DATABASE_URL -f sql/001_init_schemas.sql
 ```
 
-Esto genera la connection string que luego va en el archivo `.env`.
+### dbt
+
+dbt transforma los datos de `raw` y los materializa como tablas en Neon directamente (schemas `silver` y `gold`). Para configurarlo:
+
+```bash
+# Inicializar el proyecto dbt dentro del repo
+source venv/bin/activate
+dbt init dbt --skip-profile-setup
+```
+
+Esto crea la carpeta `dbt/` con la estructura del proyecto. Luego configurar el perfil de conexión en `~/.dbt/profiles.yml`:
+
+```yaml
+rent_radar:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      url: "{{ env_var('NEON_DATABASE_URL') }}"
+      schema: silver
+```
+
+Para correr los modelos:
+
+```bash
+cd dbt && dbt run
+```
+
+dbt leerá los `.sql` de `dbt/models/` y creará las tablas correspondientes en Neon. Los schemas `silver` y `gold` se crean automáticamente si no existen.
 
 ### Variables de entorno
 
@@ -98,6 +143,29 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
 
+## ▶️ Uso
+
+### Scrape individual
+
+```bash
+source venv/bin/activate
+
+python main.py --ingest \
+  --source mercadolibre \
+  --start-url "https://inmuebles.mercadolibre.com.ar/..." \
+  --max-pages 3
+```
+
+Fuentes disponibles: `mercadolibre`, `argenprop`, `zonaprop`.
+
+### Scrape completo (tres portales en paralelo)
+
+Configurar las URLs y `max_pages` por fuente en `run_ingest.py`, luego:
+
+```bash
+python run_ingest.py
+```
+
 ## 📋 Caso de uso
 
-Ideal para quienes buscan departamento en el Gran Buenos Aires y quieren ser los primeros en enterarse de nuevas publicaciones que cumplan sus requisitos exactos, sin tener que revisar manualmente varios portales inmobiliarios varias veces al día.
+Ideal para quienes buscan alquiler en el Gran Buenos Aires y quieren ser los primeros en enterarse de nuevas publicaciones que cumplan sus requisitos exactos, sin revisar manualmente varios portales varias veces al día.
