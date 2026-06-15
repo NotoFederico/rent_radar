@@ -21,8 +21,8 @@ def fetch_listings() -> list[dict]:
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
             select titulo, url, precio, moneda, fuente,
-                   ambientes, dormitorios, banos, superficie_m2,
-                   ubicacion, latitud, longitud
+                   ambientes, superficie_cubierta, superficie_total,
+                   cocheras, antiguedad, ubicacion, latitud, longitud
             from gold.objetivo
             where latitud is not null and longitud is not null
         """)
@@ -117,11 +117,12 @@ L.marker([-34.6662631, -58.5766229], {{ icon: iconRef }})
 datos.forEach(p => {{
   const m = L.marker([p.latitud, p.longitud], {{ icon: circulo() }});
   const precio = formatPrecio(p.precio, p.moneda);
+  const sup = p.superficie_cubierta ?? p.superficie_total;
   const detalle = [
-    p.ambientes     ? `${{p.ambientes}} amb.`    : null,
-    p.dormitorios   ? `${{p.dormitorios}} dorm.` : null,
-    p.banos         ? `${{p.banos}} baños`       : null,
-    p.superficie_m2 ? `${{p.superficie_m2}} m²`  : null,
+    p.ambientes          ? `${{p.ambientes}} amb.`      : null,
+    sup                  ? `${{sup}} m² cub.`            : null,
+    p.cocheras           ? `${{p.cocheras}} coch.`       : null,
+    p.antiguedad != null ? `${{p.antiguedad}} años`      : null,
   ].filter(Boolean).join(" · ");
   m.bindPopup(`
     <b><a class="popup-link" href="${{p.url}}" target="_blank">${{p.titulo}}</a></b>

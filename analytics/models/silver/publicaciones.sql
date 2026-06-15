@@ -24,6 +24,59 @@ deduped as (
     order by fuente, id_publicacion, fecha_scraping desc
 ),
 
+specs_parsed as (
+    -- Extrae campos estructurados desde el array especificaciones según el formato de cada portal.
+    -- ZonaProp:     "200 m² tot." / "115 m² cub." / "1 coch." / "55 años"
+    -- Argenprop:    "82 m² Cubierta" o "Sup. Cubierta: 82 m2"
+    --               "385 m² Terreno" o "Sup. Total: 115 m2"
+    --               "1 cochera" / "55 años"
+    -- MercadoLibre: "Superficie cubierta: 118 m²" / "Superficie total: 151 m²"
+    --               "Cocheras: 1" / "Antigüedad: 55 años" / "Ambientes: 3"
+    select
+        d.id,
+        max(case
+            when d.fuente = 'zonaprop'     and s.spec ~* '\d+\s*m²\s*cub'
+                then (regexp_match(s.spec, '(\d+)\s*m', 'i'))[1]::numeric
+            when d.fuente = 'argenprop'    and s.spec ~* 'm²\s*cubierta'
+                then (regexp_match(s.spec, '(\d+)\s*m', 'i'))[1]::numeric
+            when d.fuente = 'argenprop'    and s.spec ~* '^sup\.\s*cubierta\s*:'
+                then (regexp_match(s.spec, ':\s*(\d+)', 'i'))[1]::numeric
+            when d.fuente = 'mercadolibre' and s.spec ~* '^superficie\s+cubierta\s*:'
+                then (regexp_match(s.spec, ':\s*(\d+)', 'i'))[1]::numeric
+        end) as superficie_cubierta,
+        max(case
+            when d.fuente = 'zonaprop'     and s.spec ~* '\d+\s*m²\s*tot'
+                then (regexp_match(s.spec, '(\d+)\s*m', 'i'))[1]::numeric
+            when d.fuente = 'argenprop'    and s.spec ~* 'm²\s*terreno'
+                then (regexp_match(s.spec, '(\d+)\s*m', 'i'))[1]::numeric
+            when d.fuente = 'argenprop'    and s.spec ~* '^sup\.\s*total\s*:'
+                then (regexp_match(s.spec, ':\s*(\d+)', 'i'))[1]::numeric
+            when d.fuente = 'mercadolibre' and s.spec ~* '^superficie\s+total\s*:'
+                then (regexp_match(s.spec, ':\s*(\d+)', 'i'))[1]::numeric
+        end) as superficie_total,
+        max(case
+            when d.fuente = 'zonaprop'     and s.spec ~* '^\d+\s*coch'
+                then (regexp_match(s.spec, '^(\d+)', 'i'))[1]::numeric
+            when d.fuente = 'argenprop'    and s.spec ~* '^\d+\s*cochera'
+                then (regexp_match(s.spec, '^(\d+)', 'i'))[1]::numeric
+            when d.fuente = 'mercadolibre' and s.spec ~* '^cocheras\s*:'
+                then (regexp_match(s.spec, ':\s*(\d+)', 'i'))[1]::numeric
+        end) as cocheras,
+        max(case
+            when d.fuente in ('zonaprop', 'argenprop') and s.spec ~* '^\d+\s*años'
+                then (regexp_match(s.spec, '^(\d+)', 'i'))[1]::numeric
+            when d.fuente = 'mercadolibre' and s.spec ~* '^antig'
+                then (regexp_match(s.spec, '(\d+)\s*años?', 'i'))[1]::numeric
+        end) as antiguedad,
+        max(case
+            when d.fuente = 'mercadolibre' and s.spec ~* '^ambientes\s*:'
+                then (regexp_match(s.spec, ':\s*(\d+)', 'i'))[1]::numeric
+        end) as spec_ambientes
+    from deduped d
+    left join lateral unnest(d.especificaciones) as s(spec) on true
+    group by d.id
+),
+
 candidatos as (
     -- Solo publicaciones residenciales de alquiler participan en el cruce cross-portal.
     -- Uso comercial y venta/permuta generan falsos positivos al compartir coordenadas
@@ -66,37 +119,62 @@ duplicados_cross_portal as (
             / greatest(a.precio, b.precio)::float <= 0.10
 ),
 
+enriched as (
+    -- Aplica COALESCE(raw, specs) para ambientes y añade columnas nuevas desde specs.
+    select
+        d.id,
+        d.id_ejecucion,
+        d.fuente,
+        d.id_publicacion,
+        d.url,
+        d.titulo,
+        d.precio,
+        d.moneda,
+        d.expensas,
+        d.ubicacion,
+        d.latitud,
+        d.longitud,
+        coalesce(d.ambientes, sp.spec_ambientes) as ambientes,
+        sp.superficie_cubierta,
+        sp.superficie_total,
+        sp.cocheras,
+        sp.antiguedad,
+        d.publicado_en,
+        d.fecha_scraping,
+        d.vendedor,
+        d.especificaciones
+    from deduped d
+    left join specs_parsed sp on d.id = sp.id
+),
+
 filtered as (
     select
         *,
         case
             when titulo ilike '%uso comercial%'
-              or titulo ilike '%solo comercial%' then 'uso_comercial'
-            when titulo ilike '%venta permuta%'  then 'venta_permuta'
-            when url           is null then 'url_nula'
-            when titulo        is null then 'titulo_nulo'
-            when precio        is null then 'precio_nulo'
-            when moneda        is null then 'moneda_nula'
-            when ubicacion     is null then 'ubicacion_nula'
-            when latitud       is null then 'latitud_nula'
-            when longitud      is null then 'longitud_nula'
-            when ambientes     is null then 'ambientes_nulo'
-            when dormitorios   is null then 'dormitorios_nulo'
-            when banos         is null then 'banos_nulo'
-            when superficie_m2 is null then 'superficie_nula'
-            when latitud  >= 0         then 'latitud_invalida'
-            when longitud >= 0         then 'longitud_invalida'
-            when ambientes     = 0     then 'ambientes_cero'
-            when dormitorios   = 0     then 'dormitorios_cero'
-            when banos         = 0     then 'banos_cero'
-            when superficie_m2 = 0     then 'superficie_cero'
-            when moneda = 'ARS' and precio < 500000   then 'precio_ars_bajo'
-            when moneda = 'ARS' and precio > 3000000  then 'precio_ars_alto'
-            when moneda = 'USD' and precio < 100      then 'precio_usd_bajo'
-            when moneda = 'USD' and precio > 3000     then 'precio_usd_alto'
+              or titulo ilike '%solo comercial%'                          then 'uso_comercial'
+            when titulo ilike '%venta permuta%'                          then 'venta_permuta'
+            when url           is null                                   then 'url_nula'
+            when titulo        is null                                   then 'titulo_nulo'
+            when precio        is null                                   then 'precio_nulo'
+            when moneda        is null                                   then 'moneda_nula'
+            when ubicacion     is null                                   then 'ubicacion_nula'
+            when latitud       is null                                   then 'latitud_nula'
+            when longitud      is null                                   then 'longitud_nula'
+            when ambientes     is null                                   then 'ambientes_nulo'
+            when coalesce(superficie_cubierta, superficie_total) is null then 'superficie_nula'
+            when latitud  >= 0                                           then 'latitud_invalida'
+            when longitud >= 0                                           then 'longitud_invalida'
+            when ambientes     = 0                                       then 'ambientes_cero'
+            when coalesce(superficie_cubierta, superficie_total) = 0    then 'superficie_cero'
+            when precio = 9999999                                        then 'precio_placeholder'
+            when moneda = 'ARS' and precio < 500000                     then 'precio_ars_bajo'
+            when moneda = 'ARS' and precio > 3000000                    then 'precio_ars_alto'
+            when moneda = 'USD' and precio < 100                        then 'precio_usd_bajo'
+            when moneda = 'USD' and precio > 3000                       then 'precio_usd_alto'
             else null
         end as motivo_rechazo
-    from deduped
+    from enriched
     where id not in (select id_a_eliminar from duplicados_cross_portal)
 )
 
@@ -114,9 +192,10 @@ select
     latitud,
     longitud,
     ambientes,
-    dormitorios,
-    banos,
-    superficie_m2,
+    superficie_cubierta,
+    superficie_total,
+    cocheras,
+    antiguedad,
     publicado_en,
     fecha_scraping,
     vendedor,
