@@ -137,21 +137,13 @@ class ArgenpropSpider:
         if soup is None:
             return None
 
-        summary_title = self._text(soup, "h2.title-type-sup-property")
-        title = summary_title or self._text(soup, "h1") or "Propiedad en Argenprop"
+        title = self._text(soup, "h1.section-description--title") or self._text(soup, "h1") or "Propiedad en Argenprop"
         specifications = self._extract_specifications(soup)
-        specs_text = " ".join(specifications)
 
-        rooms = self._extract_numeric_from_text(summary_title, r"(\d+(?:[\.,]\d+)?)\s*amb")
-        surface_m2 = self._extract_numeric_from_text(summary_title, r"(\d+(?:[\.,]\d+)?)\s*m")
-        bedrooms = self._extract_numeric_from_text(summary_title, r"(\d+(?:[\.,]\d+)?)\s*dorm")
-        bathrooms = self._extract_numeric_from_text(summary_title, r"(\d+(?:[\.,]\d+)?)\s*ba")
-
-        if rooms is None or surface_m2 is None or bedrooms is None or bathrooms is None:
-            rooms = rooms or self._extract_numeric_from_text(specs_text, r"(?:cant\.?\s*)?amb(?:ientes?)?\s*:?\s*(\d+(?:[\.,]\d+)?)")
-            surface_m2 = surface_m2 or self._extract_numeric_from_text(specs_text, r"(?:sup\.?\s*(?:cubierta|total)?\s*:?\s*)?(\d+(?:[\.,]\d+)?)\s*(?:m2|m²)")
-            bedrooms = bedrooms or self._extract_numeric_from_text(specs_text, r"(?:cant\.?\s*)?dorm(?:itorios?)?\s*:?\s*(\d+(?:[\.,]\d+)?)")
-            bathrooms = bathrooms or self._extract_numeric_from_text(specs_text, r"(?:cant\.?\s*)?ba(?:n|ñ)os?\s*:?\s*(\d+(?:[\.,]\d+)?)")
+        rooms = self._feature_int(soup, "Ambientes")
+        bedrooms = self._feature_int(soup, "Dormitorios")
+        bathrooms = self._feature_int(soup, "Baños")
+        surface_m2 = self._feature_float_m2(soup, "Sup. cubierta") or self._feature_float_m2(soup, "Sup. total")
 
         published_at = self._extract_published_date(soup)
         latitude, longitude = self._extract_coordinates(soup)
@@ -260,18 +252,37 @@ class ArgenpropSpider:
             return None
 
     @staticmethod
+    def _feature_int(soup: BeautifulSoup, title: str) -> float | None:
+        node = soup.select_one(f'li[title="{title}"] p.strong')
+        if not node:
+            return None
+        m = re.search(r"(\d+)", node.get_text("", strip=True))
+        return float(m.group(1)) if m else None
+
+    @staticmethod
+    def _feature_float_m2(soup: BeautifulSoup, title: str) -> int | None:
+        node = soup.select_one(f'li[title="{title}"] p.strong')
+        if not node:
+            return None
+        m = re.search(r"(\d+)", node.get_text("", strip=True))
+        return int(m.group(1)) if m else None
+
+    @staticmethod
     def _extract_specifications(soup: BeautifulSoup) -> list[str]:
         specs: list[str] = []
+        seen: set[str] = set()
 
-        for node in soup.select("ul.property-features li p"):
-            text = " ".join(node.get_text(" ", strip=True).split())
-            if text:
-                specs.append(text)
-
-        for node in soup.select("li.property-features-item"):
-            text = " ".join(node.get_text(" ", strip=True).split())
-            if text:
-                specs.append(text)
+        for selector in (
+            "ul.property-main-features li p",
+            "ul.property-features li p",
+            "ul.property-features li h3",
+            "li.property-features-item",
+        ):
+            for node in soup.select(selector):
+                text = " ".join(node.get_text(" ", strip=True).split())
+                if text and text not in seen:
+                    seen.add(text)
+                    specs.append(text)
 
         return specs
 

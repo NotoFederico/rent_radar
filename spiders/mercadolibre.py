@@ -29,8 +29,10 @@ _UA = (
 class SpiderConfig:
     request_timeout: int = 30
     max_pages: int = 3
-    delay_min: float = 3.0
-    delay_max: float = 7.0
+    delay_min: float = 5.0
+    delay_max: float = 12.0
+    session_size: int = 20       # reiniciar contexto del browser cada N listings de detalle
+    session_restart_delay: float = 30.0  # pausa (seg) antes de abrir nuevo contexto
 
 
 class MercadoLibreSpider:
@@ -38,6 +40,7 @@ class MercadoLibreSpider:
 
     def __init__(self, config: SpiderConfig | None = None):
         self.config = config or SpiderConfig()
+        self._detail_count = 0
         logger.info("Iniciando navegador (Playwright/Chromium)...")
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=True)
@@ -97,7 +100,15 @@ class MercadoLibreSpider:
                     all_urls.append(href)
 
             if not seen_links:
-                logger.warning("Pagina %d: ningun selector matcheo publicaciones", page_num)
+                page_title = soup.find("title")
+                snippet = soup.get_text(" ", strip=True)[:300]
+                logger.warning(
+                    "Pagina %d: ningun selector matcheo | page_title=%s | snippet=%s",
+                    page_num,
+                    page_title.get_text() if page_title else "N/A",
+                    snippet,
+                )
+                break
             logger.info("Pagina %d: %d publicaciones encontradas", page_num, len(seen_links))
 
             if page_num >= self.config.max_pages:
@@ -130,10 +141,22 @@ class MercadoLibreSpider:
         if soup is None:
             return None
 
-        title = self._text(soup, "h1.ui-pdp-title")
+        title = (
+            self._text(soup, "h1.ui-pdp-title")
+            or self._text(soup, "h1.ui-vip-title")
+            or self._text(soup, "h1[class*='title']")
+            or self._text(soup, "h1")
+        )
         if not title:
-            logger.warning("Listing descartado: no se encontro titulo | url=%s", detail_url)
+            h1_tags = [str(tag) for tag in soup.find_all("h1")]
+            logger.warning(
+                "Listing descartado: no se encontro titulo | url=%s | h1_tags=%s",
+                detail_url,
+                h1_tags[:3],
+            )
             return None
+        if not self._text(soup, "h1.ui-pdp-title"):
+            logger.debug("Titulo encontrado con selector alternativo | url=%s | title=%s", detail_url, title)
 
         price = self._parse_price(
             self._text(soup, "span[data-testid='price-part'] span.andes-money-amount__fraction")
@@ -165,6 +188,42 @@ class MercadoLibreSpider:
             specifications=self._extract_specifications(soup),
         )
 
+    def _restart_context(self) -> None:
+        """Cierra el contexto actual y abre uno nuevo para resetear cookies y fingerprint."""
+        session_num = self._detail_count // self.config.session_size
+        logger.info(
+            "Rotando contexto del browser (sesion %d) — pausa de %.0fs...",
+            session_num,
+            self.config.session_restart_delay,
+        )
+        time.sleep(self.config.session_restart_delay)
+        try:
+            self._page.close()
+            self._ctx.close()
+        except Exception:
+            pass
+        self._ctx = self._browser.new_context(
+            user_agent=_UA,
+            locale="es-AR",
+            viewport={"width": random.randint(1280, 1440), "height": random.randint(700, 900)},
+        )
+        self._page = self._ctx.new_page()
+        Stealth().apply_stealth_sync(self._page)
+        logger.info("Nuevo contexto listo")
+
+    @staticmethod
+    def _is_blocked(soup: BeautifulSoup) -> bool:
+        """Detecta si MercadoLibre devolvio una pagina de captcha o verificacion."""
+        title_tag = soup.find("title")
+        if title_tag:
+            t = title_tag.get_text("", strip=True).lower()
+            if any(kw in t for kw in ("captcha", "verificaci", "robot", "acceso denegado", "error")):
+                return True
+        # Paginas de bloqueo tienen muy pocos elementos
+        if len(soup.find_all(["h1", "h2", "p"])) < 3:
+            return True
+        return False
+
     def _delay(self) -> None:
         time.sleep(random.uniform(self.config.delay_min, self.config.delay_max))
 
@@ -190,6 +249,10 @@ class MercadoLibreSpider:
             return None
 
     def _navigate(self, url: str) -> BeautifulSoup | None:
+        self._detail_count += 1
+        if self._detail_count > 1 and (self._detail_count - 1) % self.config.session_size == 0:
+            self._restart_context()
+
         logger.debug("Navegando a detalle: %s", url)
         self._delay()
         try:
@@ -197,11 +260,15 @@ class MercadoLibreSpider:
             if resp and resp.status >= 400:
                 logger.error("HTTP %d al pedir %s", resp.status, url)
                 return None
-            # Simula lectura: scroll suave + pausa antes de extraer
             self._page.evaluate(f"window.scrollBy(0, {random.randint(200, 600)})")
             self._page.wait_for_timeout(random.randint(800, 1800))
+            soup = BeautifulSoup(self._page.content(), "html.parser")
+            if self._is_blocked(soup):
+                logger.warning("Pagina bloqueada detectada, rotando contexto | url=%s", url)
+                self._restart_context()
+                return None
             logger.debug("HTTP %d | url=%s", resp.status if resp else 0, url)
-            return BeautifulSoup(self._page.content(), "html.parser")
+            return soup
         except Exception as exc:
             logger.error("Error navegando a %s: %s", url, exc)
             return None

@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument(
 		"--ingest",
 		action="store_true",
-		help="Ejecuta un scrape real e ingesta snapshots en MongoDB",
+		help="Ejecuta un scrape real e ingesta snapshots en Neon",
 	)
 	parser.add_argument(
 		"--source",

@@ -105,15 +105,17 @@ psql $NEON_DATABASE_URL -f sql/001_init_schemas.sql
 
 ### dbt
 
-dbt transforma los datos de `raw` y los materializa como tablas en Neon directamente (schemas `silver` y `gold`). Para configurarlo:
+dbt transforma los datos de `raw` y los materializa como tablas directamente en Neon (schemas `silver` y `gold`). El proyecto dbt vive en la carpeta `dbt/` del repo.
 
-```bash
-# Inicializar el proyecto dbt dentro del repo
-source venv/bin/activate
-dbt init dbt --skip-profile-setup
-```
+> La carpeta `dbt/` ya está inicializada en el repo. Si necesitás recrearla desde cero:
+> ```bash
+> source venv/bin/activate
+> dbt init dbt --skip-profile-setup
+> ```
 
-Esto crea la carpeta `dbt/` con la estructura del proyecto. Luego configurar el perfil de conexión en `~/.dbt/profiles.yml`:
+**1. Configurar el perfil de conexión**
+
+dbt necesita un archivo de conexión en `~/.dbt/profiles.yml` (fuera del repo, nunca se versiona):
 
 ```yaml
 rent_radar:
@@ -125,13 +127,26 @@ rent_radar:
       schema: silver
 ```
 
-Para correr los modelos:
+**2. Verificar la conexión**
 
 ```bash
-cd dbt && dbt run
+cd dbt
+dbt debug
 ```
 
-dbt leerá los `.sql` de `dbt/models/` y creará las tablas correspondientes en Neon. Los schemas `silver` y `gold` se crean automáticamente si no existen.
+**3. Correr los modelos**
+
+```bash
+dbt run
+```
+
+dbt leerá los `.sql` de `dbt/models/`, los ejecutará contra Neon y creará las tablas en los schemas correspondientes. Los schemas se crean automáticamente si no existen.
+
+**4. Correr tests**
+
+```bash
+dbt test
+```
 
 ### Variables de entorno
 
