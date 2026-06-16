@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import datetime
-from pathlib import Path
+from datetime import UTC, datetime
+from importlib.metadata import version
 
 from app.db import ScraperDB
 from app.models import Event, EventType, Listing, Notification, PipelineRun
@@ -17,25 +17,25 @@ logging.basicConfig(
 
 
 def run_ingest(source: str, start_urls: list[str], max_pages: int) -> None:
-	"""Ejecuta scraping de una fuente y persiste snapshots en MongoDB."""
+	"""Ejecuta scraping de una fuente y persiste snapshots en Neon Postgres."""
 	
 	db = ScraperDB()
 	run = PipelineRun(source=source, status="running", listings_found=0)
 
 	try:
-		db.initialize()
+		db.insert_run(run.to_run_row())
 		listings = scrape_source(source=source, start_urls=start_urls, max_pages=max_pages)
 		snapshot_rows = [item.to_snapshot_row(run.run_id) for item in listings]
 		db.insert_snapshots(snapshot_rows)
 
 		run.listings_found = len(snapshot_rows)
 		run.status = "ok"
-		print(f"Ingest OK | fuente={source} | publicaciones={run.listings_found}")
+		logging.info("Ingest OK | fuente=%s | publicaciones=%d", source, run.listings_found)
 	except Exception:
 		run.status = "error"
 		raise
 	finally:
-		run.finished_at = datetime.utcnow()
+		run.finished_at = datetime.now(UTC)
 		db.insert_run(run.to_run_row())
 		db.close()
 
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
 	parser.add_argument(
 		"--ingest",
 		action="store_true",
-		help="Ejecuta un scrape real e ingesta snapshots en MongoDB",
+		help="Ejecuta un scrape real e ingesta snapshots en Neon",
 	)
 	parser.add_argument(
 		"--source",
@@ -90,5 +90,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-	logging.info("Rent Radar v0.1.0")
+	logging.info("Rent Radar v%s", version("rent-radar"))
 	main()

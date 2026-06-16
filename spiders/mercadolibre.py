@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -9,6 +11,7 @@ from typing import Iterable
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
 
 from app.models import Listing
 
@@ -21,14 +24,16 @@ _UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
-_STEALTH_SCRIPT = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
 
 
 @dataclass(slots=True)
 class SpiderConfig:
     request_timeout: int = 30
     max_pages: int = 3
-    delay_between_requests: float = 2.4
+    delay_min: float = 5.0
+    delay_max: float = 12.0
+    session_size: int = 20       # reiniciar contexto del browser cada N listings de detalle
+    session_restart_delay: float = 30.0  # pausa (seg) antes de abrir nuevo contexto
 
 
 class MercadoLibreSpider:
@@ -36,18 +41,18 @@ class MercadoLibreSpider:
 
     def __init__(self, config: SpiderConfig | None = None):
         self.config = config or SpiderConfig()
+        self._detail_count = 0
+        logger.info("Iniciando navegador (Playwright/Chromium)...")
         self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        self._browser = self._pw.chromium.launch(headless=True)
         self._ctx = self._browser.new_context(
             user_agent=_UA,
             locale="es-AR",
             viewport={"width": 1366, "height": 768},
         )
-        self._ctx.add_init_script(_STEALTH_SCRIPT)
         self._page = self._ctx.new_page()
+        Stealth().apply_stealth_sync(self._page)
+        logger.info("Navegador listo")
 
     def close(self) -> None:
         try:
@@ -73,28 +78,38 @@ class MercadoLibreSpider:
                 listing = self._parse_listing(detail_url)
                 if listing is not None:
                     results.append(listing)
+                    print(f"\r  mercadolibre: {len(results)} publicaciones...", end="", flush=True)
             logger.info("Scrape completado | url=%s | nuevas=%d", start_url, len(results) - before)
+        print()
         if not results:
             logger.warning("Se obtuvieron 0 publicaciones en total. Revisar selectores o bloqueo HTTP.")
         return results
 
     def _iter_detail_urls(self, start_url: str) -> Iterable[str]:
         all_urls: list[str] = []
-        soup = self._navigate(start_url)
+        soup = self._navigate_search(start_url)
         for page_num in range(1, self.config.max_pages + 1):
             if soup is None:
                 logger.warning("No se pudo obtener pagina %d", page_num)
                 break
 
             seen_links: set[str] = set()
-            for node in soup.select("li.ui-search-layout__item a.poly-component__title"):
+            for node in soup.select("a.poly-component__title"):
                 href = node.get("href")
                 if href and href not in seen_links:
                     seen_links.add(href)
                     all_urls.append(href)
 
             if not seen_links:
-                logger.warning("Pagina %d: ningun selector matcheo publicaciones", page_num)
+                page_title = soup.find("title")
+                snippet = soup.get_text(" ", strip=True)[:300]
+                logger.warning(
+                    "Pagina %d: ningun selector matcheo | page_title=%s | snippet=%s",
+                    page_num,
+                    page_title.get_text() if page_title else "N/A",
+                    snippet,
+                )
+                break
             logger.info("Pagina %d: %d publicaciones encontradas", page_num, len(seen_links))
 
             if page_num >= self.config.max_pages:
@@ -109,10 +124,13 @@ class MercadoLibreSpider:
         return all_urls
 
     def _click_next_page(self, page_num: int) -> BeautifulSoup | None:
-        time.sleep(self.config.delay_between_requests)
+        self._delay()
         try:
             self._page.click("[data-andes-pagination-control='next']")
-            self._page.wait_for_load_state("domcontentloaded")
+            try:
+                self._page.wait_for_selector("a.poly-component__title", timeout=15_000)
+            except Exception:
+                self._page.wait_for_timeout(3_000)
             logger.info("Paginacion: click en Siguiente desde pagina %d | nueva url=%s", page_num, self._page.url)
             return BeautifulSoup(self._page.content(), "html.parser")
         except Exception as exc:
@@ -124,10 +142,25 @@ class MercadoLibreSpider:
         if soup is None:
             return None
 
-        title = self._text(soup, "h1.ui-pdp-title")
+        title = (
+            self._text(soup, "h1.ui-pdp-title")
+            or self._text(soup, "h1.ui-vip-title")
+            or self._text(soup, "h1[class*='title']")
+            or self._text(soup, "h1")
+            or self._text(soup, "h2.ui-pdp-title")
+            or self._text(soup, "h2.ui-vip-title")
+            or self._title_from_jsonld(soup)
+            or self._title_from_url(detail_url)
+        )
         if not title:
-            logger.warning("Listing descartado: no se encontro titulo | url=%s", detail_url)
+            logger.warning(
+                "Listing descartado: no se encontro titulo | url=%s | h1_tags=%s",
+                detail_url,
+                [str(t) for t in soup.find_all("h1")][:3],
+            )
             return None
+        if not self._text(soup, "h1.ui-pdp-title"):
+            logger.debug("Titulo encontrado con selector alternativo | url=%s | title=%s", detail_url, title)
 
         price = self._parse_price(
             self._text(soup, "span[data-testid='price-part'] span.andes-money-amount__fraction")
@@ -159,15 +192,90 @@ class MercadoLibreSpider:
             specifications=self._extract_specifications(soup),
         )
 
-    def _navigate(self, url: str) -> BeautifulSoup | None:
-        time.sleep(self.config.delay_between_requests)
+    def _restart_context(self) -> None:
+        """Cierra el contexto actual y abre uno nuevo para resetear cookies y fingerprint."""
+        session_num = self._detail_count // self.config.session_size
+        logger.info(
+            "Rotando contexto del browser (sesion %d) — pausa de %.0fs...",
+            session_num,
+            self.config.session_restart_delay,
+        )
+        time.sleep(self.config.session_restart_delay)
+        try:
+            self._page.close()
+            self._ctx.close()
+        except Exception:
+            pass
+        self._ctx = self._browser.new_context(
+            user_agent=_UA,
+            locale="es-AR",
+            viewport={"width": random.randint(1280, 1440), "height": random.randint(700, 900)},
+        )
+        self._page = self._ctx.new_page()
+        Stealth().apply_stealth_sync(self._page)
+        logger.info("Nuevo contexto listo")
+
+    @staticmethod
+    def _is_blocked(soup: BeautifulSoup) -> bool:
+        """Detecta si MercadoLibre devolvio una pagina de captcha o verificacion."""
+        title_tag = soup.find("title")
+        if title_tag:
+            t = title_tag.get_text("", strip=True).lower()
+            if any(kw in t for kw in ("captcha", "verificaci", "robot", "acceso denegado", "error")):
+                return True
+        # Paginas de bloqueo tienen muy pocos elementos
+        if len(soup.find_all(["h1", "h2", "p"])) < 3:
+            return True
+        return False
+
+    def _delay(self) -> None:
+        time.sleep(random.uniform(self.config.delay_min, self.config.delay_max))
+
+    def _navigate_search(self, url: str) -> BeautifulSoup | None:
+        """Navega a una página de resultados y espera que React renderice los cards."""
+        logger.info("Esperando delay anti-bot antes de cargar busqueda...")
+        self._delay()
+        logger.info("Cargando pagina de busqueda...")
         try:
             resp = self._page.goto(url, timeout=self.config.request_timeout * 1000, wait_until="domcontentloaded")
             if resp and resp.status >= 400:
                 logger.error("HTTP %d al pedir %s", resp.status, url)
                 return None
-            logger.debug("HTTP %d | url=%s", resp.status if resp else 0, url)
+            logger.info("Pagina cargada (HTTP %d), esperando publicaciones...", resp.status if resp else 0)
+            try:
+                self._page.wait_for_selector("a.poly-component__title", timeout=15_000)
+            except Exception:
+                logger.debug("wait_for_selector timeout, usando espera fija")
+                self._page.wait_for_timeout(3_000)
             return BeautifulSoup(self._page.content(), "html.parser")
+        except Exception as exc:
+            logger.error("Error navegando a %s: %s", url, exc)
+            return None
+
+    def _navigate(self, url: str) -> BeautifulSoup | None:
+        self._detail_count += 1
+        if self._detail_count > 1 and (self._detail_count - 1) % self.config.session_size == 0:
+            self._restart_context()
+
+        logger.debug("Navegando a detalle: %s", url)
+        self._delay()
+        try:
+            resp = self._page.goto(url, timeout=self.config.request_timeout * 1000, wait_until="domcontentloaded")
+            if resp and resp.status >= 400:
+                logger.error("HTTP %d al pedir %s", resp.status, url)
+                return None
+            self._page.evaluate(f"window.scrollBy(0, {random.randint(200, 600)})")
+            try:
+                self._page.wait_for_selector("h1", timeout=8_000)
+            except Exception:
+                self._page.wait_for_timeout(random.randint(800, 1800))
+            soup = BeautifulSoup(self._page.content(), "html.parser")
+            if self._is_blocked(soup):
+                logger.warning("Pagina bloqueada detectada, rotando contexto | url=%s", url)
+                self._restart_context()
+                return None
+            logger.debug("HTTP %d | url=%s", resp.status if resp else 0, url)
+            return soup
         except Exception as exc:
             logger.error("Error navegando a %s: %s", url, exc)
             return None
@@ -359,6 +467,26 @@ class MercadoLibreSpider:
             return now - timedelta(days=amount * 30)
         if unit.startswith("a"):
             return now - timedelta(days=amount * 365)
+        return None
+
+
+    @staticmethod
+    def _title_from_jsonld(soup: BeautifulSoup) -> str | None:
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "")
+                if isinstance(data, dict) and data.get("@type") == "Product":
+                    return data.get("name") or None
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _title_from_url(url: str) -> str | None:
+        match = re.search(r"MLA-\d+-(.*?)(?:-_JM|_JM|$)", url)
+        if match:
+            slug = match.group(1).replace("-", " ").strip()
+            return slug.capitalize() if slug else None
         return None
 
 
