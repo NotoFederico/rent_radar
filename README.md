@@ -1,19 +1,20 @@
 # Rent Radar
 
 > **Automated rental monitoring for the Argentine market.**
-> Scrapes three major portals, transforms the data with dbt, detects price changes and new listings, and delivers Telegram notifications — running every 45 minutes on a self-hosted server.
+> Scrapes three major portals, transforms the data with dbt, detects price changes and new listings, and delivers Telegram notifications — running every 35 minutes on a self-hosted server.
 
 ![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![dbt](https://img.shields.io/badge/dbt-postgres-orange?logo=dbt&logoColor=white)
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
+![Version](https://img.shields.io/badge/version-1.3-blue)
 
 ---
 
 ## ¿Qué hace?
 
-1. **Scraping** — tres spiders corren en paralelo cada 45 minutos y persisten snapshots crudos en Neon Postgres.
+1. **Scraping** — tres spiders corren en paralelo cada 35 minutos y persisten snapshots crudos en Neon Postgres.
 2. **Transformación** — dbt limpia, deduplica y enriquece en capas `silver` y `gold`.
 3. **Detección de eventos** — compara runs consecutivos y emite eventos tipados: `NEW`, `PRICE_DOWN`, `PRICE_UP`, `EXPENSES_CHANGE`, `CURRENCY_CHANGE`, `OFF_MARKET`.
 4. **Notificaciones** — mensajes formateados por Telegram, con reintento automático si el envío falla.
@@ -23,31 +24,44 @@
 
 ## Arquitectura
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   Prefect (cada 45 min)             │
-│                                                     │
-│  ┌──────────┐  ┌───────────┐  ┌─────────────────┐  │
-│  │zonaprop  │  │ argenprop │  │  mercadolibre   │  │  ← spiders en paralelo
-│  └────┬─────┘  └─────┬─────┘  └────────┬────────┘  │
-│       └──────────────┴─────────────────┘           │
-│                       │                             │
-│               raw.snapshots (Neon)                  │
-│                       │                             │
-│                   dbt run                           │
-│          ┌────────────┴────────────┐                │
-│    silver.publicaciones      silver.publicaciones   │
-│      (limpias, dedup)          _rechazadas          │
-│          │                                          │
-│    gold.objetivo                                    │
-│    (filtradas por presupuesto y superficie)         │
-│          │                                          │
-│   detect_events.py ──► silver.events               │
-│                               │                     │
-│                          notify.py ──► Telegram     │
-│                                                     │
-│                   generar_mapa.py ──► mapa.html     │
-└─────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    classDef spider  fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f,font-weight:bold
+    classDef process fill:#ede9fe,stroke:#7c3aed,color:#3b0764,font-weight:bold
+    classDef db      fill:#d1fae5,stroke:#059669,color:#064e3b
+    classDef out     fill:#fef3c7,stroke:#d97706,color:#78350f,font-weight:bold
+
+    RAW[("raw.snapshots\nNeon Postgres")]:::db
+    SIL[("silver.publicaciones\nlimpias + dedup")]:::db
+    GOLD[("gold.objetivo\nfiltradas por presupuesto")]:::db
+    EV[("silver.events")]:::db
+    TG(["📱 Telegram"]):::out
+    MAP(["🗺 mapa.html · Leaflet + OSM"]):::out
+
+    subgraph Prefect ["⏱ Prefect — cada 35 min"]
+        subgraph Ingest ["Ingest en paralelo"]
+            ZP["ZonaProp · curl_cffi"]:::spider
+            AP["ArgenProp · requests"]:::spider
+            ML["MercadoLibre · Playwright + stealth"]:::spider
+        end
+        DBT["dbt run · run_dbt.py"]:::process
+        DE["detect_events.py"]:::process
+        NO["notify.py"]:::process
+        GM["generar_mapa.py"]:::process
+    end
+
+    ZP --> RAW
+    AP --> RAW
+    ML --> RAW
+    RAW --> DBT
+    DBT --> SIL
+    SIL --> GOLD
+    GOLD --> DE
+    DE --> EV
+    EV --> NO
+    NO --> TG
+    NO --> GM
+    GM --> MAP
 ```
 
 **Schemas en Neon Postgres:**
@@ -163,7 +177,7 @@ Solo la primera vez:
 ```bash
 PREFECT_API_URL=http://127.0.0.1:4200/api prefect work-pool create --type process local
 PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:pipeline \
-  --name cada_45_min --pool local --interval 2700
+  --name cada_35min --pool local --interval 2100
 ```
 
 ---
@@ -201,7 +215,7 @@ sudo journalctl -u prefect-worker -f
 
 ---
 
-## Estado (v1.1)
+## Estado
 
 - [x] Spiders: ZonaProp, ArgenProp, MercadoLibre
 - [x] Pipeline dbt: raw → silver → gold
