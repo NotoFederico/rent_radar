@@ -202,7 +202,7 @@ HTML_TEMPLATE = """\
   .prop-card:hover {{ box-shadow:0 2px 10px rgba(0,0,0,.08); border-color:#c5cfe8; }}
   .prop-card.selected {{ border-color:var(--blue); box-shadow:0 0 0 2px #c7d7fa; }}
   .prop-top {{ display:flex; align-items:flex-start; justify-content:space-between; gap:6px; }}
-  .prop-titulo {{ font-size:12.5px; font-weight:600; line-height:1.45; flex:1; }}
+  .prop-titulo {{ font-size:12.5px; font-weight:600; line-height:1.4.15; flex:1; }}
   .prop-badge {{ font-size:10px; font-weight:700; padding:2px 7px; border-radius:20px; white-space:nowrap; flex-shrink:0; margin-top:1px; }}
   .prop-precio {{ font-size:14px; font-weight:700; }}
   .prop-detalle {{ font-size:11px; color:var(--muted); }}
@@ -222,7 +222,7 @@ HTML_TEMPLATE = """\
   .mk-PRICE_UP   {{ background:#DC2626; }}
   .mk-ref {{ width:24px; height:24px; border-radius:50%; background:#FBBF24; border:3px solid white; box-shadow:0 2px 10px rgba(0,0,0,.4); }}
 
-  .popup-titulo {{ font-weight:700; font-size:13px; margin-bottom:4px; line-height:1.4; }}
+  .popup-titulo {{ font-weight:700; font-size:13px; margin-bottom:4px; line-height:1.4.1; }}
   .popup-precio {{ font-size:15px; font-weight:800; color:var(--blue); margin-bottom:3px; }}
   .popup-det    {{ font-size:11.5px; color:#555; margin-bottom:2px; }}
   .popup-loc    {{ font-size:11px; color:#888; margin-bottom:7px; }}
