@@ -63,6 +63,20 @@ def get_snapshots(cur: psycopg2.extensions.cursor, id_ejecucion: str) -> dict[st
     return {r["id_publicacion"]: dict(r) for r in cur.fetchall()}
 
 
+def get_ever_seen_ids(cur: psycopg2.extensions.cursor, fuente: str, exclude_run: str) -> set[str]:
+    """IDs que alguna vez aparecieron en cualquier run anterior a exclude_run, para esta fuente."""
+    cur.execute(
+        """
+        SELECT DISTINCT s.id_publicacion
+        FROM raw.snapshots s
+        JOIN raw.pipeline_runs pr ON pr.id_ejecucion = s.id_ejecucion
+        WHERE s.fuente = %s AND s.id_ejecucion != %s
+        """,
+        (fuente, exclude_run),
+    )
+    return {r["id_publicacion"] for r in cur.fetchall()}
+
+
 def get_silver_ids(cur: psycopg2.extensions.cursor, fuente: str) -> set[str]:
     """IDs de publicaciones que pasan el filtro de gold.objetivo."""
     cur.execute(
@@ -80,12 +94,14 @@ def detect(
     run_b: str,
     snaps_ref: dict[str, dict] | None = None,
     newer_ids_list: list[set[str]] | None = None,
+    ever_seen: set[str] | None = None,
 ) -> list[dict]:
     """
     snaps_a / snaps_b: par más reciente para NEW / PRICE / EXPENSES comparisons.
     snaps_ref: run de referencia (el más viejo) donde la propiedad existía.
     newer_ids_list: IDs de todos los runs más recientes que snaps_ref.
       OFF_MARKET se emite solo si la propiedad está en snaps_ref pero ausente en TODOS newer_ids_list.
+    ever_seen: IDs ya vistos en cualquier run anterior a run_b. NEW solo se emite si no está aquí.
     """
     events: list[dict] = []
 
@@ -107,8 +123,11 @@ def detect(
             "expensas_nuevo": None,
         }
 
-    # NEW — apareció en B, no estaba en A, y está en silver
-    for pid in (ids_b - ids_a) & silver_ids:
+    # NEW — apareció en B, no estaba en A, está en silver, y nunca se había visto antes
+    truly_new = (ids_b - ids_a) & silver_ids
+    if ever_seen is not None:
+        truly_new -= ever_seen
+    for pid in truly_new:
         e = base(pid, snaps_b[pid], "NEW")
         e["precio_nuevo"] = snaps_b[pid].get("precio")
         events.append(e)
@@ -213,6 +232,7 @@ def main() -> None:
         snaps_a = get_snapshots(cur, run_a)
         snaps_b = get_snapshots(cur, run_b)
         silver_ids = get_silver_ids(cur, fuente)
+        ever_seen = get_ever_seen_ids(cur, fuente, run_b)
 
         # OFF_MARKET: runs[-1] es el más viejo (referencia); runs[:-1] son los más recientes
         if len(runs) >= n_needed:
@@ -222,7 +242,7 @@ def main() -> None:
             snaps_ref = None
             newer_ids_list = None
 
-        events = detect(snaps_a, snaps_b, silver_ids, fuente, run_b, snaps_ref, newer_ids_list)
+        events = detect(snaps_a, snaps_b, silver_ids, fuente, run_b, snaps_ref, newer_ids_list, ever_seen)
 
         if not events:
             print(" — sin cambios")
