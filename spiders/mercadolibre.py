@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -146,13 +147,16 @@ class MercadoLibreSpider:
             or self._text(soup, "h1.ui-vip-title")
             or self._text(soup, "h1[class*='title']")
             or self._text(soup, "h1")
+            or self._text(soup, "h2.ui-pdp-title")
+            or self._text(soup, "h2.ui-vip-title")
+            or self._title_from_jsonld(soup)
+            or self._title_from_url(detail_url)
         )
         if not title:
-            h1_tags = [str(tag) for tag in soup.find_all("h1")]
             logger.warning(
                 "Listing descartado: no se encontro titulo | url=%s | h1_tags=%s",
                 detail_url,
-                h1_tags[:3],
+                [str(t) for t in soup.find_all("h1")][:3],
             )
             return None
         if not self._text(soup, "h1.ui-pdp-title"):
@@ -261,7 +265,10 @@ class MercadoLibreSpider:
                 logger.error("HTTP %d al pedir %s", resp.status, url)
                 return None
             self._page.evaluate(f"window.scrollBy(0, {random.randint(200, 600)})")
-            self._page.wait_for_timeout(random.randint(800, 1800))
+            try:
+                self._page.wait_for_selector("h1", timeout=8_000)
+            except Exception:
+                self._page.wait_for_timeout(random.randint(800, 1800))
             soup = BeautifulSoup(self._page.content(), "html.parser")
             if self._is_blocked(soup):
                 logger.warning("Pagina bloqueada detectada, rotando contexto | url=%s", url)
@@ -460,6 +467,26 @@ class MercadoLibreSpider:
             return now - timedelta(days=amount * 30)
         if unit.startswith("a"):
             return now - timedelta(days=amount * 365)
+        return None
+
+
+    @staticmethod
+    def _title_from_jsonld(soup: BeautifulSoup) -> str | None:
+        for script in soup.find_all("script", type="application/ld+json"):
+            try:
+                data = json.loads(script.string or "")
+                if isinstance(data, dict) and data.get("@type") == "Product":
+                    return data.get("name") or None
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _title_from_url(url: str) -> str | None:
+        match = re.search(r"MLA-\d+-(.*?)(?:-_JM|_JM|$)", url)
+        if match:
+            slug = match.group(1).replace("-", " ").strip()
+            return slug.capitalize() if slug else None
         return None
 
 

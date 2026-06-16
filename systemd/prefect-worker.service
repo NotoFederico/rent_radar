@@ -1,0 +1,16 @@
+[Unit]
+Description=Prefect Worker (pool: local)
+After=network.target prefect-server.service
+Requires=prefect-server.service
+
+[Service]
+User=YOUR_USER
+WorkingDirectory=YOUR_PROJECT_DIR
+ExecStart=YOUR_PROJECT_DIR/venv/bin/prefect worker start --pool local
+EnvironmentFile=YOUR_PROJECT_DIR/.env
+Environment=PREFECT_API_URL=http://127.0.0.1:4200/api
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

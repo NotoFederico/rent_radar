@@ -72,8 +72,8 @@ HTML_TEMPLATE = """\
 const datos = {datos_json};
 
 const mapa = L.map("mapa");
-L.tileLayer("https://tiles.stadiamaps.com/tiles/alidade_smooth/{{z}}/{{x}}/{{y}}{{r}}.png", {{
-  attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>',
+L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png", {{
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   maxZoom: 20,
 }}).addTo(mapa);
 

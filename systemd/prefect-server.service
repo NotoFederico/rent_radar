@@ -1,0 +1,16 @@
+[Unit]
+Description=Prefect Server
+After=network.target
+
+[Service]
+User=YOUR_USER
+WorkingDirectory=YOUR_PROJECT_DIR
+ExecStart=YOUR_PROJECT_DIR/venv/bin/prefect server start --host 0.0.0.0
+Environment=PREFECT_API_URL=http://127.0.0.1:4200/api
+Environment=PREFECT_UI_API_URL=http://YOUR_SERVER_IP:4200/api
+Environment=PREFECT_SERVER_DATABASE_CONNECTION_URL=sqlite+aiosqlite:////home/YOUR_USER/.prefect/prefect.db?timeout=60
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

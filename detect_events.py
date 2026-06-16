@@ -28,23 +28,24 @@ if not DATABASE_URL:
 
 FUENTES = ["zonaprop", "argenprop", "mercadolibre"]
 
+# Ausencias consecutivas requeridas antes de emitir OFF_MARKET.
+# Con runs cada 45 min: 3 ausencias = ~2h15m mínimo antes de notificar.
+CONSECUTIVE_OFF_ABSENCES = 3
 
-def get_last_two_runs(cur: psycopg2.extensions.cursor, fuente: str) -> tuple[str | None, str | None]:
-    """Retorna (run_anterior_id, run_actual_id) ordenados por finalizado_en desc."""
+
+def get_last_runs(cur: psycopg2.extensions.cursor, fuente: str, n: int = 3) -> list[str]:
+    """Retorna los últimos N runs exitosos (más reciente primero)."""
     cur.execute(
         """
         SELECT id_ejecucion
         FROM raw.pipeline_runs
         WHERE fuente = %s AND estado = 'ok'
         ORDER BY finalizado_en DESC
-        LIMIT 2
+        LIMIT %s
         """,
-        (fuente,),
+        (fuente, n),
     )
-    rows = cur.fetchall()
-    if len(rows) < 2:
-        return None, None
-    return rows[1]["id_ejecucion"], rows[0]["id_ejecucion"]  # (anterior, actual)
+    return [r["id_ejecucion"] for r in cur.fetchall()]
 
 
 def get_snapshots(cur: psycopg2.extensions.cursor, id_ejecucion: str) -> dict[str, dict]:
@@ -77,7 +78,15 @@ def detect(
     silver_ids: set[str],
     fuente: str,
     run_b: str,
+    snaps_ref: dict[str, dict] | None = None,
+    newer_ids_list: list[set[str]] | None = None,
 ) -> list[dict]:
+    """
+    snaps_a / snaps_b: par más reciente para NEW / PRICE / EXPENSES comparisons.
+    snaps_ref: run de referencia (el más viejo) donde la propiedad existía.
+    newer_ids_list: IDs de todos los runs más recientes que snaps_ref.
+      OFF_MARKET se emite solo si la propiedad está en snaps_ref pero ausente en TODOS newer_ids_list.
+    """
     events: list[dict] = []
 
     ids_a = set(snaps_a)
@@ -104,11 +113,20 @@ def detect(
         e["precio_nuevo"] = snaps_b[pid].get("precio")
         events.append(e)
 
-    # OFF_MARKET — estaba en A, no está en B
-    # No filtramos por silver: si desapareció del portal nos interesa igual
-    for pid in ids_a - ids_b:
-        e = base(pid, snaps_a[pid], "OFF_MARKET")
-        e["precio_anterior"] = snaps_a[pid].get("precio")
+    # OFF_MARKET — ausente en CONSECUTIVE_OFF_ABSENCES runs consecutivos.
+    # snaps_ref es el run más viejo (donde existía); newer_ids_list son todos los runs
+    # más recientes. Solo se emite si la propiedad está ausente en todos ellos.
+    if snaps_ref is not None and newer_ids_list is not None:
+        confirmed_off = set(snaps_ref)
+        for recent_ids in newer_ids_list:
+            confirmed_off -= recent_ids
+    else:
+        confirmed_off = ids_a - ids_b  # fallback si no hay suficientes runs
+
+    for pid in confirmed_off:
+        snap = snaps_ref.get(pid) if snaps_ref else snaps_a.get(pid, {})
+        e = base(pid, snap, "OFF_MARKET")
+        e["precio_anterior"] = snap.get("precio")
         events.append(e)
 
     # Propiedades en ambas corridas y en silver → cambios
@@ -182,10 +200,13 @@ def main() -> None:
     total = 0
 
     for fuente in FUENTES:
-        run_a, run_b = get_last_two_runs(cur, fuente)
-        if not run_a:
+        n_needed = CONSECUTIVE_OFF_ABSENCES + 1
+        runs = get_last_runs(cur, fuente, n=n_needed)
+        if len(runs) < 2:
             print(f"  {fuente}: sin corrida anterior, saltando")
             continue
+
+        run_b, run_a = runs[0], runs[1]
 
         print(f"  {fuente}: {run_a[:8]}… → {run_b[:8]}…", end="", flush=True)
 
@@ -193,7 +214,15 @@ def main() -> None:
         snaps_b = get_snapshots(cur, run_b)
         silver_ids = get_silver_ids(cur, fuente)
 
-        events = detect(snaps_a, snaps_b, silver_ids, fuente, run_b)
+        # OFF_MARKET: runs[-1] es el más viejo (referencia); runs[:-1] son los más recientes
+        if len(runs) >= n_needed:
+            snaps_ref = get_snapshots(cur, runs[-1])
+            newer_ids_list = [set(get_snapshots(cur, r)) for r in runs[:-1]]
+        else:
+            snaps_ref = None
+            newer_ids_list = None
+
+        events = detect(snaps_a, snaps_b, silver_ids, fuente, run_b, snaps_ref, newer_ids_list)
 
         if not events:
             print(" — sin cambios")

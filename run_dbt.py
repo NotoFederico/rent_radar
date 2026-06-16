@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
@@ -25,7 +26,8 @@ def main() -> None:
         print(f"No se pudo obtener el tipo de cambio ({e}), usando fallback: ${tc}")
 
     vars_json = json.dumps({"tipo_cambio_usd": tc})
-    cmd = ["dbt", "run", "--vars", vars_json]
+    dbt_bin = os.path.join(os.path.dirname(sys.executable), "dbt")
+    cmd = [dbt_bin, "run", "--vars", vars_json]
 
     extra = sys.argv[1:]
     if extra:

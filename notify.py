@@ -93,11 +93,17 @@ def build_message(ev: dict, pub: dict | None) -> str:
             msg += f"\n[Ver propiedad]({url})"
 
     elif tipo == "EXPENSES_CHANGE":
-        ant = _fmt_precio(ev.get("expensas_anterior"), "ARS")
-        nue = _fmt_precio(ev.get("expensas_nuevo"), "ARS")
+        ant_val = ev.get("expensas_anterior")
+        nue_val = ev.get("expensas_nuevo")
+        nue = _fmt_precio(nue_val, "ARS")
         msg  = f"*Cambio de expensas*\n\n"
         msg += f"*{titulo}*\n\n"
-        msg += f"Expensas: ~{ant}~ → *{nue}*/mes\n"
+        if ant_val is None:
+            msg += f"Expensas informadas: {nue}/mes\n"
+        else:
+            ant = _fmt_precio(ant_val, "ARS")
+            msg += f"Anterior: {ant}/mes\n"
+            msg += f"Nuevo: {nue}/mes\n"
         if url:
             msg += f"\n[Ver propiedad]({url})"
 
