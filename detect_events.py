@@ -78,9 +78,9 @@ def get_ever_seen_ids(cur: psycopg2.extensions.cursor, fuente: str, exclude_run:
 
 
 def get_silver_ids(cur: psycopg2.extensions.cursor, fuente: str) -> set[str]:
-    """IDs de publicaciones que pasan el filtro de gold.objetivo."""
+    """IDs de publicaciones que pasan el filtro de gold.candidatas."""
     cur.execute(
-        "SELECT id_publicacion FROM gold.objetivo WHERE fuente = %s",
+        "SELECT id_publicacion FROM gold.candidatas WHERE fuente = %s",
         (fuente,),
     )
     return {r["id_publicacion"] for r in cur.fetchall()}

@@ -153,7 +153,7 @@ def fetch_publicacion(cur, fuente: str, id_publicacion: str) -> dict | None:
     cur.execute("""
         SELECT ambientes, superficie_cubierta, superficie_total,
                cocheras, antiguedad, ubicacion
-        FROM gold.objetivo
+        FROM gold.candidatas
         WHERE fuente = %s AND id_publicacion = %s
         LIMIT 1
     """, (fuente, id_publicacion))

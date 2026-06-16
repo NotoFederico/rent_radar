@@ -8,7 +8,11 @@
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.3-blue)
+![Version](https://img.shields.io/badge/version-1.4-blue)
+
+---
+
+![Dashboard](docs/screenshot.png)
 
 ---
 
@@ -18,7 +22,7 @@
 2. **Transformación** — dbt limpia, deduplica y enriquece en capas `silver` y `gold`.
 3. **Detección de eventos** — compara runs consecutivos y emite eventos tipados: `NEW`, `PRICE_DOWN`, `PRICE_UP`, `EXPENSES_CHANGE`, `CURRENCY_CHANGE`, `OFF_MARKET`.
 4. **Notificaciones** — mensajes formateados por Telegram, con reintento automático si el envío falla.
-5. **Mapa interactivo** — `mapa.html` con Leaflet + OpenStreetMap, con live-reload cuando se regenera.
+5. **Mapa interactivo** — `dashboard.html` con Leaflet + OpenStreetMap, con live-reload cuando se regenera.
 
 ---
 
@@ -33,10 +37,10 @@ flowchart TD
 
     RAW[("raw.snapshots\nNeon Postgres")]:::db
     SIL[("silver.publicaciones\nlimpias + dedup")]:::db
-    GOLD[("gold.objetivo\nfiltradas por presupuesto")]:::db
+    GOLD[("gold.candidatas\nfiltradas por presupuesto")]:::db
     EV[("silver.events")]:::db
     TG(["📱 Telegram"]):::out
-    MAP(["🗺 mapa.html · Leaflet + OSM"]):::out
+    MAP(["🗺 dashboard.html · Leaflet + OSM"]):::out
 
     subgraph Prefect ["⏱ Prefect — cada 35 min"]
         subgraph Ingest ["Ingest en paralelo"]
@@ -47,7 +51,7 @@ flowchart TD
         DBT["dbt run · run_dbt.py"]:::process
         DE["detect_events.py"]:::process
         NO["notify.py"]:::process
-        GM["generar_mapa.py"]:::process
+        GM["run_dashboard.py"]:::process
     end
 
     ZP --> RAW
@@ -70,7 +74,7 @@ flowchart TD
 |--------|--------|-------------|
 | `raw` | `pipeline_runs`, `snapshots` | Salida directa de los spiders |
 | `silver` | `publicaciones`, `publicaciones_rechazadas`, `events`, `notifications` | Datos limpios + auditoría |
-| `gold` | `objetivo` | Propiedades que cumplen presupuesto y criterios |
+| `gold` | `candidatas`, `metricas` | Propiedades filtradas por presupuesto y criterios · métricas de la última corrida |
 
 ---
 
@@ -191,7 +195,7 @@ python run_ingest.py                       # scrape los tres portales en paralel
 python run_dbt.py                          # transforma con dbt (tipo de cambio auto)
 python detect_events.py                    # detecta cambios entre última y anteúltima corrida
 python notify.py                           # envía eventos pendientes por Telegram
-python generar_mapa.py                     # regenera mapa.html
+python run_dashboard.py                     # genera dashboard.html con métricas
 ```
 
 ### Un solo portal
@@ -203,8 +207,8 @@ python run_ingest.py --source zonaprop
 ### Mapa con servidor local
 
 ```bash
-python generar_mapa.py --serve --port 8080
-# → http://localhost:8080/mapa.html
+python run_dashboard.py --serve --port 8080
+# → http://localhost:8080/dashboard.html
 ```
 
 ### Logs en tiempo real

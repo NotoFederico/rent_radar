@@ -64,9 +64,9 @@ def task_notify() -> None:
     _run("notify.py")
 
 
-@task(name="mapa")
+@task(name="dashboard")
 def task_mapa() -> None:
-    _run("generar_mapa.py")
+    _run("run_dashboard.py")
 
 
 @flow(name="rent-radar", log_prints=True)
