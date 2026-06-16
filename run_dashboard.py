@@ -145,6 +145,18 @@ HTML_TEMPLATE = """\
   .nav-spacer {{ flex:1; }}
   .nav-pill {{ font-size:11px; font-weight:600; padding:3px 10px; border-radius:20px; background:#EEF2FF; color:var(--blue); border:1px solid #C7D7FA; }}
   .nav-tg {{ font-size:11px; font-weight:600; padding:3px 10px; border-radius:20px; background:#E8F4FD; color:#229ED9; border:1px solid #A8D5F5; display:flex; align-items:center; gap:5px; }}
+  .nav-credit {{ font-size:11px; color:var(--muted); white-space:nowrap; }}
+
+  @media (max-width:700px) {{
+    :root {{ --sidebar-w:100%; }}
+    .layout {{ flex-direction:column; }}
+    aside {{ width:100%; border-right:none; border-bottom:1px solid var(--border); max-height:42vh; }}
+    #mapa {{ flex:1; min-height:0; }}
+    .nav-credit, .nav-tg, .nav-sep {{ display:none; }}
+    .nav-run {{ font-size:11px; }}
+    .metrics-grid {{ grid-template-columns:repeat(4,1fr); }}
+    .eventos-strip {{ grid-template-columns:repeat(4,1fr); }}
+  }}
 
 
   .layout {{ display:flex; flex:1; overflow:hidden; }}
@@ -185,7 +197,7 @@ HTML_TEMPLATE = """\
 
   .fuentes-strip {{ background:var(--white); border:1px solid var(--border); border-radius:var(--radius); padding:11px 12px; display:flex; flex-direction:column; gap:7px; }}
   .fuente-row {{ display:flex; align-items:center; gap:8px; }}
-  .fuente-name {{ font-size:11.5px; font-weight:600; width:100px; }}
+  .fuente-name {{ font-size:11.6px; font-weight:600; width:100px; }}
   .fuente-track {{ flex:1; height:6px; background:var(--border); border-radius:6px; overflow:hidden; }}
   .fuente-fill {{ height:100%; border-radius:6px; }}
   .fuente-count {{ font-size:11px; font-weight:700; color:var(--muted); width:24px; text-align:right; }}
@@ -194,7 +206,7 @@ HTML_TEMPLATE = """\
   .fill-ml    {{ background:#F97316; }}
 
   .chips {{ display:flex; gap:6px; flex-wrap:wrap; }}
-  .chip {{ font-size:11px; font-weight:600; padding:4px 10px; border-radius:20px; border:1.5px solid transparent; cursor:pointer; transition:opacity .15s; }}
+  .chip {{ font-size:11px; font-weight:600; padding:4px 10px; border-radius:20px; border:1.6px solid transparent; cursor:pointer; transition:opacity .15s; }}
   .chip:not(.active) {{ opacity:.35; }}
   .chip-all   {{ background:#EEF2FF; color:var(--blue);  border-color:#C7D7FA; }}
   .chip-zona  {{ background:#FEF3C7; color:#92400E;      border-color:#FDE68A; }}
@@ -206,7 +218,7 @@ HTML_TEMPLATE = """\
   .prop-card:hover {{ box-shadow:0 2px 10px rgba(0,0,0,.08); border-color:#c5cfe8; }}
   .prop-card.selected {{ border-color:var(--blue); box-shadow:0 0 0 2px #c7d7fa; }}
   .prop-top {{ display:flex; align-items:flex-start; justify-content:space-between; gap:6px; }}
-  .prop-titulo {{ font-size:12.5px; font-weight:600; line-height:1.55; flex:1; }}
+  .prop-titulo {{ font-size:12.5px; font-weight:600; line-height:1.65; flex:1; }}
   .prop-badge {{ font-size:10px; font-weight:700; padding:2px 7px; border-radius:20px; white-space:nowrap; flex-shrink:0; margin-top:1px; }}
   .prop-precio {{ font-size:14px; font-weight:700; }}
   .prop-detalle {{ font-size:11px; color:var(--muted); }}
@@ -226,11 +238,11 @@ HTML_TEMPLATE = """\
   .mk-PRICE_UP   {{ background:#DC2626; }}
   .mk-ref {{ width:24px; height:24px; border-radius:50%; background:#FBBF24; border:3px solid white; box-shadow:0 2px 10px rgba(0,0,0,.4); }}
 
-  .popup-titulo {{ font-weight:700; font-size:13px; margin-bottom:4px; line-height:1.5; }}
+  .popup-titulo {{ font-weight:700; font-size:13px; margin-bottom:4px; line-height:1.6; }}
   .popup-precio {{ font-size:15px; font-weight:800; color:var(--blue); margin-bottom:3px; }}
-  .popup-det    {{ font-size:11.5px; color:#555; margin-bottom:2px; }}
+  .popup-det    {{ font-size:11.6px; color:#555; margin-bottom:2px; }}
   .popup-loc    {{ font-size:11px; color:#888; margin-bottom:7px; }}
-  .leaflet-popup-content .popup-link {{ display:inline-block; font-size:11.5px; font-weight:600; color:white !important; background:var(--blue); padding:4px 12px; border-radius:6px; text-decoration:none; }}
+  .leaflet-popup-content .popup-link {{ display:inline-block; font-size:11.6px; font-weight:600; color:white !important; background:var(--blue); padding:4px 12px; border-radius:6px; text-decoration:none; }}
   .leaflet-popup-content {{ min-width:190px; }}
 
   .c-blue   {{ color:var(--blue); }}
@@ -251,9 +263,9 @@ HTML_TEMPLATE = """\
     Última corrida: {ultima_corrida}
   </div>
   <div class="nav-spacer"></div>
-  <span style="font-size:11px;color:var(--muted);">by Federico Noto</span>
+  <span class="nav-credit">by Federico Noto</span>
   <div class="nav-sep"></div>
-  <div class="nav-tg"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg> Notificaciones vía Telegram</div>
+  <div class="nav-tg"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.624 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg> Notificaciones vía Telegram</div>
 </nav>
 
 <div class="layout">
