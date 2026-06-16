@@ -168,13 +168,13 @@ def mark_notified(cur, id_evento: str) -> None:
     )
 
 
-def log_notification(cur, id_evento: str, mensaje: str) -> None:
+def log_notification(cur, id_evento: str, mensaje: str, estado: str = "sent") -> None:
     cur.execute(
         """
         INSERT INTO silver.notifications (id_evento, canal, mensaje, estado)
-        VALUES (%s, 'telegram', %s, 'sent')
+        VALUES (%s, 'telegram', %s, %s)
         """,
-        (id_evento, mensaje),
+        (id_evento, mensaje, estado),
     )
 
 
@@ -194,17 +194,29 @@ def main() -> None:
         conn.close()
         return
 
-    print(f"{len(eventos)} evento(s) pendiente(s):")
+    # OFF_MARKET temporalmente silenciado en Telegram (inunda cada corrida) — se
+    # sigue marcando como notificado para no acumular backlog.
+    off_market = [e for e in eventos if e["tipo_evento"] == "OFF_MARKET"]
+    otros = [e for e in eventos if e["tipo_evento"] != "OFF_MARKET"]
+
+    for ev in off_market:
+        mensaje = build_message(ev, None)
+        mark_notified(cur, ev["id_evento"])
+        log_notification(cur, ev["id_evento"], mensaje, estado="skipped")
+        conn.commit()
+    if off_market:
+        print(f"  SKIP [OFF_MARKET] {len(off_market)} evento(s) silenciado(s)")
+
+    print(f"{len(otros)} evento(s) pendiente(s):")
     ok = err = 0
 
-    n = len(eventos)
-    header = f"🔍 *Corrida {datetime.now().strftime('%d/%m %H:%M')}* — {n} novedad{'es' if n != 1 else ''}"
-    notifier.send(header)
+    if otros:
+        n = len(otros)
+        header = f"🔍 *Corrida {datetime.now().strftime('%d/%m %H:%M')}* — {n} novedad{'es' if n != 1 else ''}"
+        notifier.send(header)
 
-    for ev in eventos:
-        pub = None
-        if ev["tipo_evento"] != "OFF_MARKET":
-            pub = fetch_publicacion(cur, ev["fuente"], ev["id_publicacion"])
+    for ev in otros:
+        pub = fetch_publicacion(cur, ev["fuente"], ev["id_publicacion"])
 
         mensaje = build_message(ev, pub)
         enviado = notifier.send(mensaje)
