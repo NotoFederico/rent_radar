@@ -3,7 +3,7 @@ Prefect flow principal de Rent Radar.
 
 Deploy (una sola vez, con el servidor y el pool ya creados):
     prefect work-pool create --type process local
-    prefect deploy pipeline.py:pipeline --name diario --pool local --interval 2700
+    prefect deploy pipeline.py:pipeline --name cada_35min --pool local --interval 2100
 
 El worker levanta los runs; este archivo no necesita correr 24/7.
 """

@@ -1,116 +1,103 @@
-# Rent Radar — Sistema de Monitoreo Inmobiliario
+# Rent Radar
 
-Sistema automatizado que monitorea publicaciones de alquiler en múltiples portales argentinos, transforma y enriquece los datos con dbt, detecta eventos de cambio, envía notificaciones por Telegram y genera un mapa interactivo de propiedades candidatas.
+> **Automated rental monitoring for the Argentine market.**
+> Scrapes three major portals, transforms the data with dbt, detects price changes and new listings, and delivers Telegram notifications — running every 45 minutes on a self-hosted server.
 
-## Índice
-
-- [Descripción](#descripción)
-- [Arquitectura](#arquitectura)
-- [Estado actual](#estado-actual-v06)
-- [Stack tecnológico](#stack-tecnológico)
-- [Instalación](#instalación)
-- [Uso](#uso)
+![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
+![dbt](https://img.shields.io/badge/dbt-postgres-orange?logo=dbt&logoColor=white)
+![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
+![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
+![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
 
 ---
 
-## Descripción
+## ¿Qué hace?
 
-Rent Radar scrapea publicaciones de alquiler de ZonaProp, ArgenProp y MercadoLibre, normaliza y guarda los datos crudos en Neon Postgres, los transforma con dbt en capas silver y gold, detecta cambios entre corridas (nuevas propiedades, bajadas de precio, off-market) y notifica por Telegram. El pipeline corre cada 45 minutos orquestado por Prefect self-hosted.
+1. **Scraping** — tres spiders corren en paralelo cada 45 minutos y persisten snapshots crudos en Neon Postgres.
+2. **Transformación** — dbt limpia, deduplica y enriquece en capas `silver` y `gold`.
+3. **Detección de eventos** — compara runs consecutivos y emite eventos tipados: `NEW`, `PRICE_DOWN`, `PRICE_UP`, `EXPENSES_CHANGE`, `CURRENCY_CHANGE`, `OFF_MARKET`.
+4. **Notificaciones** — mensajes formateados por Telegram, con reintento automático si el envío falla.
+5. **Mapa interactivo** — `mapa.html` con Leaflet + OpenStreetMap, con live-reload cuando se regenera.
+
+---
 
 ## Arquitectura
 
 ```
-Spiders ──► raw.snapshots ──► dbt silver ──► dbt gold ──► mapa.html
-              (Neon)          publicaciones    objetivo    (Leaflet/OSM)
-                              rechazadas
-                                  │
-                            detect_events.py
-                                  │
-                            silver.events ──► notify.py ──► Telegram
+┌─────────────────────────────────────────────────────┐
+│                   Prefect (cada 45 min)             │
+│                                                     │
+│  ┌──────────┐  ┌───────────┐  ┌─────────────────┐  │
+│  │zonaprop  │  │ argenprop │  │  mercadolibre   │  │  ← spiders en paralelo
+│  └────┬─────┘  └─────┬─────┘  └────────┬────────┘  │
+│       └──────────────┴─────────────────┘           │
+│                       │                             │
+│               raw.snapshots (Neon)                  │
+│                       │                             │
+│                   dbt run                           │
+│          ┌────────────┴────────────┐                │
+│    silver.publicaciones      silver.publicaciones   │
+│      (limpias, dedup)          _rechazadas          │
+│          │                                          │
+│    gold.objetivo                                    │
+│    (filtradas por presupuesto y superficie)         │
+│          │                                          │
+│   detect_events.py ──► silver.events               │
+│                               │                     │
+│                          notify.py ──► Telegram     │
+│                                                     │
+│                   generar_mapa.py ──► mapa.html     │
+└─────────────────────────────────────────────────────┘
 ```
 
-**Portales scrapeados:** ZonaProp, ArgenProp, MercadoLibre
-
 **Schemas en Neon Postgres:**
-- `raw` — salida directa de los spiders: `pipeline_runs`, `snapshots`
-- `silver` — datos limpios y enriquecidos: `publicaciones`, `publicaciones_rechazadas`, `events`, `notifications`
-- `gold` — propiedades candidatas filtradas por presupuesto y superficie: `objetivo`
 
-## Estado actual (v1.0)
+| Schema | Tablas | Descripción |
+|--------|--------|-------------|
+| `raw` | `pipeline_runs`, `snapshots` | Salida directa de los spiders |
+| `silver` | `publicaciones`, `publicaciones_rechazadas`, `events`, `notifications` | Datos limpios + auditoría |
+| `gold` | `objetivo` | Propiedades que cumplen presupuesto y criterios |
 
-### Implementado
+---
 
-**Spiders**
-- `zonaprop.py` — curl_cffi con impersonación de Chrome
-- `argenprop.py` — HTTP liviano con requests
-- `mercadolibre.py` — Playwright + playwright-stealth con manejo de bot detection; timeout de inactividad de 120 s para evitar cuelgues; extracción de título desde JSON-LD como fallback
-- Los tres extraen: precio, moneda, expensas, ubicación, coordenadas, ambientes, especificaciones
+## Stack
 
-**Ingesta**
-- `run_ingest.py` — corre los tres spiders en paralelo con `threading`; acepta `--source` para correr un solo portal
-- `main.py` — CLI con flags `--ingest`, `--source`, `--start-url`, `--max-pages`
-- Reconexión automática a Neon si la conexión SSL expira durante un scrape largo
+| Capa | Tecnología | Detalle |
+|------|------------|---------|
+| Scraping | `curl_cffi` | Impersonación de Chrome — ZonaProp |
+| Scraping | `Playwright` + `playwright-stealth` | Browser automation con bypass de bot detection — MercadoLibre |
+| Scraping | `requests` + `BeautifulSoup4` | HTTP liviano — ArgenProp |
+| Base de datos | Neon Postgres (serverless) | 3 schemas, pool de conexiones |
+| Transformaciones | dbt-postgres | Limpieza, deduplicación cross-portal, filtros |
+| Orquestación | Prefect self-hosted | Server + worker vía systemd |
+| Notificaciones | Telegram Bot API | Multi-chat, retry automático |
+| Visualización | Leaflet.js + OpenStreetMap | Mapa con popups y live-reload |
 
-**Capa silver (dbt)**
-- `publicaciones.sql`: pipeline completo de limpieza y enriquecimiento
-  - Deduplicación intra-portal por `(fuente, id_publicacion)`, quedándose con el snapshot más reciente
-  - Deduplicación cross-portal: detecta la misma propiedad publicada en más de un portal (match por bucket lat/lon ±0.001°, mismos ambientes, misma moneda, precio ±10%)
-  - Filtro de publicaciones comerciales y venta/permuta antes del cruce cross-portal
-  - Parseo de `especificaciones` por portal con regex → `superficie_cubierta`, `superficie_total`, `cocheras`, `antiguedad`
-  - Fallback `COALESCE(raw, specs)` para `ambientes`
-  - Rechazo con motivo explícito: precios fuera de rango, coordenadas inválidas, campos clave nulos
-- `publicaciones_rechazadas.sql`: espejo de la misma lógica, retiene solo los rechazados para auditoría
+---
 
-**Capa gold (dbt)**
-- `objetivo.sql`: filtra por superficie cubierta > 70 m², ambientes > 2 y presupuesto configurable (ARS o USD con conversión automática)
+## Decisiones técnicas destacadas
 
-**Pipeline dbt**
-- `run_dbt.py`: obtiene el tipo de cambio USD oficial desde dolarapi.com y lo pasa como variable dbt; fallback a valor configurable
-- Variables dbt: `tipo_cambio_usd` (auto-fetched) y `presupuesto_ars` (configurable)
+**Deduplicación cross-portal**
+La misma propiedad puede aparecer en ZonaProp, ArgenProp y MercadoLibre simultáneamente. `silver/publicaciones.sql` detecta duplicados por bucket geográfico (±0.001° lat/lon), ambientes, moneda y precio (±10%), y los consolida en una sola fila.
 
-**Detección de eventos**
-- `detect_events.py`: compara los últimos runs exitosos por portal y emite eventos en `silver.events`
-- Tipos: `NEW`, `PRICE_DOWN`, `PRICE_UP`, `EXPENSES_CHANGE`, `CURRENCY_CHANGE`, `OFF_MARKET`
-- Filtra por `gold.objetivo`: solo genera eventos para propiedades dentro del presupuesto y criterios
-- OFF_MARKET requiere 3 ausencias consecutivas (~2h15m) para evitar falsos positivos por reordenamientos del portal
-- Idempotente: `ON CONFLICT DO NOTHING` evita duplicados
+**OFF_MARKET con ventana de 3 runs**
+Una propiedad marcada como no disponible después de ausencia en una sola corrida generaría muchos falsos positivos (los portales reordenan resultados constantemente). El evento `OFF_MARKET` solo se emite si la propiedad estuvo ausente en las últimas 3 corridas consecutivas (~2h15m).
 
-**Notificaciones Telegram**
-- `notify.py`: lee `silver.events WHERE fue_notificado = FALSE`, envía mensajes formateados y registra en `silver.notifications`
-- Si el envío falla, el evento no se marca → reintento automático en la próxima corrida
-- `app/telegram.py`: `TelegramNotifier` con soporte multi-chat
+**Tipo de cambio dinámico**
+`run_dbt.py` consulta la API de dolarapi.com antes de cada run y pasa el tipo de cambio USD como variable dbt, permitiendo filtrar por presupuesto en pesos usando cotización actualizada automáticamente.
 
-**Mapa interactivo**
-- `generar_mapa.py`: consulta `gold.objetivo` y genera `mapa.html` con Leaflet + OpenStreetMap
-- Popup por propiedad: título, precio, ambientes, superficie, cocheras, antigüedad, ubicación
-- Marcador de referencia fijo (amarillo) configurable
-- Live-reload automático: el mapa se recarga solo cuando se regenera el HTML
+**Timeout de inactividad por spider**
+`run_ingest.py` monitorea la última actividad de cada spider. Si un proceso lleva más de 120 segundos sin emitir resultados, se lo termina forzosamente para no bloquear el pipeline completo.
 
-**Orquestación**
-- Prefect self-hosted: servidor + worker corriendo como servicios systemd
-- Pipeline cada 45 minutos: 3 tasks de ingest en paralelo → dbt → detect_events → notify → mapa
-- UI de Prefect accesible desde la LAN sin SSH tunnel
-
-### Pendiente
-
-- Frontend del mapa con filtros y sidebar
-- Tabla de métricas en gold
-
-## Stack tecnológico
-
-- **Scraping:** Python 3.13, Playwright, curl_cffi, requests, BeautifulSoup4
-- **Base de datos:** Neon Postgres (serverless) — schemas `raw`, `silver`, `gold`
-- **Transformaciones:** dbt-postgres (`analytics/`)
-- **Orquestación:** Prefect self-hosted (server + worker via systemd)
-- **Mapa:** Leaflet.js + OpenStreetMap tiles
-- **Notificaciones:** Telegram Bot API
+---
 
 ## Instalación
 
 ### Requisitos
 
 - Python 3.13
-- Playwright browsers: `playwright install chromium`
+- Cuenta en [neon.tech](https://neon.tech) (free tier alcanza)
+- Bot de Telegram ([@BotFather](https://t.me/BotFather))
 
 ```bash
 python3.13 -m venv venv
@@ -119,18 +106,25 @@ pip install -e .
 playwright install chromium
 ```
 
-### Neon Postgres
+### Base de datos
 
-Crear un proyecto en [neon.tech](https://neon.tech) y correr las migraciones en orden:
+Crear un proyecto en Neon y aplicar las migraciones en orden:
 
 ```bash
 psql $NEON_DATABASE_URL -f sql/001_init_schemas.sql
 psql $NEON_DATABASE_URL -f sql/002_silver_events.sql
 ```
 
+### Variables de entorno
+
+```bash
+cp .env.example .env
+# Editar .env con los valores reales
+```
+
 ### dbt
 
-El proyecto dbt vive en `analytics/`. Requiere `~/.dbt/profiles.yml`:
+Agregar en `~/.dbt/profiles.yml`:
 
 ```yaml
 analytics:
@@ -148,36 +142,19 @@ analytics:
       sslmode: require
 ```
 
-### Variables de entorno
-
-Crear `.env` en la raíz (sin `export`, sin comentarios inline — requerido por systemd):
-
-```env
-NEON_DATABASE_URL=postgresql://...
-DBT_PASSWORD=...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-```
-
 ### Servicios systemd
 
-Los archivos en `systemd/` son plantillas. Antes de copiarlos, reemplazar los placeholders:
+Los archivos en `systemd/` son plantillas. Reemplazar los placeholders antes de copiar:
 
 - `YOUR_USER` → usuario Linux (ej. `noto`)
-- `YOUR_PROJECT_DIR` → ruta absoluta del repo (ej. `/home/noto/github/rent_radar`)
+- `YOUR_PROJECT_DIR` → ruta absoluta del repo
 - `YOUR_SERVER_IP` → IP del servidor en la LAN (solo en `prefect-server.service`)
 
 ```bash
-# Editar cada archivo con los valores reales, luego:
 sudo cp systemd/*.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now prefect-server prefect-worker rent-radar-map
 ```
-
-Servicios:
-- `prefect-server` — UI en `http://YOUR_SERVER_IP:4200`
-- `prefect-worker` — ejecuta los runs del pipeline
-- `rent-radar-map` — sirve `mapa.html` en `http://YOUR_SERVER_IP:8080`
 
 ### Registrar el pipeline en Prefect
 
@@ -189,35 +166,48 @@ PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:pipeline \
   --name cada_45_min --pool local --interval 2700
 ```
 
+---
+
 ## Uso
 
-### Pipeline manual (paso a paso)
+### Pipeline completo manual
 
 ```bash
-python run_ingest.py                        # scrape los tres portales en paralelo
-python run_ingest.py --source zonaprop      # solo un portal
-python run_dbt.py                           # transforma con dbt (tipo de cambio auto)
-python detect_events.py                     # detecta cambios entre la última y anteúltima corrida
-python notify.py                            # envía eventos pendientes por Telegram
-python generar_mapa.py                      # regenera mapa.html
+python run_ingest.py                       # scrape los tres portales en paralelo
+python run_dbt.py                          # transforma con dbt (tipo de cambio auto)
+python detect_events.py                    # detecta cambios entre última y anteúltima corrida
+python notify.py                           # envía eventos pendientes por Telegram
+python generar_mapa.py                     # regenera mapa.html
 ```
 
-### Operación con Prefect
+### Un solo portal
 
-Ver logs en vivo:
+```bash
+python run_ingest.py --source zonaprop
+```
+
+### Mapa con servidor local
+
+```bash
+python generar_mapa.py --serve --port 8080
+# → http://localhost:8080/mapa.html
+```
+
+### Logs en tiempo real
 
 ```bash
 sudo journalctl -u prefect-worker -f
 ```
 
-Estado de servicios:
+---
 
-```bash
-sudo systemctl status prefect-server prefect-worker rent-radar-map
-```
+## Estado (v1.1)
 
-Cancelar un run colgado:
-
-```bash
-PREFECT_API_URL=http://127.0.0.1:4200/api prefect flow-run cancel <id>
-```
+- [x] Spiders: ZonaProp, ArgenProp, MercadoLibre
+- [x] Pipeline dbt: raw → silver → gold
+- [x] Detección de eventos (6 tipos)
+- [x] Notificaciones Telegram con encabezado por corrida
+- [x] Mapa interactivo con live-reload
+- [x] Orquestación Prefect self-hosted
+- [ ] Filtros en el frontend del mapa
+- [ ] Tabla de métricas en gold

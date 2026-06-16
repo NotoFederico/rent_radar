@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 
 import psycopg2
 import psycopg2.extras
@@ -195,6 +196,10 @@ def main() -> None:
 
     print(f"{len(eventos)} evento(s) pendiente(s):")
     ok = err = 0
+
+    n = len(eventos)
+    header = f"🔍 *Corrida {datetime.now().strftime('%d/%m %H:%M')}* — {n} novedad{'es' if n != 1 else ''}"
+    notifier.send(header)
 
     for ev in eventos:
         pub = None
