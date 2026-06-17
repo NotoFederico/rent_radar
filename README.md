@@ -1,14 +1,14 @@
 # Rent Radar
 
 > **Automated rental monitoring for the Argentine market.**
-> Scrapes three major portals, transforms the data with dbt, detects price changes and new listings, and delivers Telegram notifications — running every 35 minutes on a self-hosted server.
+> Scrapes three major portals, transforms the data with dbt, detects price changes and new listings, and delivers Telegram notifications — ZonaProp and ArgenProp run every 10 minutes, MercadoLibre runs separately every hour to avoid anti-bot blocks, all on a self-hosted server.
 
 ![Python](https://img.shields.io/badge/Python-3.13-blue?logo=python&logoColor=white)
 ![dbt](https://img.shields.io/badge/dbt-postgres-orange?logo=dbt&logoColor=white)
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.6.1-blue)
+![Version](https://img.shields.io/badge/version-1.7-blue)
 
 ---
 
@@ -18,11 +18,11 @@
 
 ## ¿Qué hace?
 
-1. **Scraping** — tres spiders corren en paralelo cada 35 minutos y persisten snapshots crudos en Neon Postgres.
-2. **Transformación** — dbt limpia, deduplica y enriquece en capas `silver` y `gold`.
+1. **Scraping** — ZonaProp y ArgenProp corren en paralelo cada 10 minutos; MercadoLibre corre en un flow de Prefect separado cada hora (Playwright es más lento y el portal aplica bloqueos anti-bot si se lo scrapea muy seguido). Todos persisten snapshots crudos en Neon Postgres.
+2. **Transformación** — dbt limpia, deduplica y enriquece en capas `silver` y `gold`, tomando la última corrida con datos útiles de cada portal de forma independiente.
 3. **Detección de eventos** — compara runs consecutivos y emite eventos tipados: `NEW`, `PRICE_DOWN`, `PRICE_UP`, `EXPENSES_CHANGE`, `CURRENCY_CHANGE`, `OFF_MARKET`.
 4. **Notificaciones** — mensajes formateados por Telegram, con reintento automático si el envío falla.
-5. **Mapa interactivo** — `dashboard.html` con Leaflet + OpenStreetMap, con live-reload cuando se regenera.
+5. **Dashboard** — `dashboard.html` con Leaflet + OpenStreetMap, métricas (mediana de precios, eventos recientes, indicador de datos desactualizados por portal) y live-reload cuando se regenera.
 
 ---
 
@@ -42,16 +42,19 @@ flowchart TD
     TG(["📱 Telegram"]):::out
     MAP(["🗺 dashboard.html · Leaflet + OSM"]):::out
 
-    subgraph Prefect ["⏱ Prefect — cada 35 min"]
+    subgraph PrefectMain ["⏱ Prefect: rent-radar — cada 10 min"]
         subgraph Ingest ["Ingest en paralelo"]
             ZP["ZonaProp · curl_cffi"]:::spider
             AP["ArgenProp · requests"]:::spider
-            ML["MercadoLibre · Playwright + stealth"]:::spider
         end
         DBT["dbt run · run_dbt.py"]:::process
         DE["detect_events.py"]:::process
         NO["notify.py"]:::process
         GM["run_dashboard.py"]:::process
+    end
+
+    subgraph PrefectMeli ["⏱ Prefect: rent-radar-mercadolibre — cada 1h"]
+        ML["MercadoLibre · Playwright + stealth"]:::spider
     end
 
     ZP --> RAW
@@ -99,7 +102,13 @@ flowchart TD
 La misma propiedad puede aparecer en ZonaProp, ArgenProp y MercadoLibre simultáneamente. `silver/publicaciones.sql` detecta duplicados por bucket geográfico (±0.001° lat/lon), ambientes, moneda y precio (±10%), y los consolida en una sola fila.
 
 **OFF_MARKET con ventana de 3 runs**
-Una propiedad marcada como no disponible después de ausencia en una sola corrida generaría muchos falsos positivos (los portales reordenan resultados constantemente). El evento `OFF_MARKET` solo se emite si la propiedad estuvo ausente en las últimas 3 corridas consecutivas (~2h15m).
+Una propiedad marcada como no disponible después de ausencia en una sola corrida generaría muchos falsos positivos (los portales reordenan resultados constantemente). El evento `OFF_MARKET` solo se emite si la propiedad estuvo ausente en las últimas 3 corridas consecutivas *de esa fuente* — `detect_events.py` mide la ventana en corridas, no en tiempo fijo, así que se adapta sola a la cadencia de cada portal (10 min en ZonaProp/ArgenProp, 1h en MercadoLibre).
+
+**MercadoLibre en un flow propio**
+Playwright scrapea MercadoLibre con delays anti-bot que pueden llevar 20-30 minutos, y el portal aplica bloqueos si se lo golpea con la misma frecuencia que los otros dos. Por eso corre en su propio flow de Prefect (`mercadolibre_pipeline`) con un intervalo independiente, sin bloquear la cadencia rápida del resto del pipeline.
+
+**Una corrida sin datos útiles no cuenta como "ok"**
+Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página de detalle también quedó bloqueada), `main.py` marca esa corrida como `empty` en vez de `ok`. Como `silver/publicaciones.sql` y `detect_events.py` solo consideran corridas `ok` para determinar "la última con datos", esto evita que un bloqueo temporal tire a 0 las propiedades de un portal en el dashboard o dispare falsos `OFF_MARKET` en cadena.
 
 **Tipo de cambio dinámico**
 `run_dbt.py` consulta la API de dolarapi.com antes de cada run y pasa el tipo de cambio USD como variable dbt, permitiendo filtrar por presupuesto en pesos usando cotización actualizada automáticamente.
@@ -181,7 +190,9 @@ Solo la primera vez:
 ```bash
 PREFECT_API_URL=http://127.0.0.1:4200/api prefect work-pool create --type process local
 PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:pipeline \
-  --name cada_35min --pool local --interval 2100
+  --name cada_10min --pool local --interval 600
+PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:mercadolibre_pipeline \
+  --name meli_cada_1h --pool local --interval 3600
 ```
 
 ---
@@ -225,7 +236,8 @@ sudo journalctl -u prefect-worker -f
 - [x] Pipeline dbt: raw → silver → gold
 - [x] Detección de eventos (6 tipos)
 - [x] Notificaciones Telegram con encabezado por corrida
-- [x] Mapa interactivo con live-reload
-- [x] Orquestación Prefect self-hosted
+- [x] Dashboard interactivo con métricas, mediana de precios y live-reload
+- [x] Orquestación Prefect self-hosted, con MercadoLibre en flow propio
+- [x] Tabla de métricas en gold
+- [x] Indicador de datos desactualizados por portal
 - [ ] Filtros en el frontend del mapa
-- [ ] Tabla de métricas en gold

@@ -1,6 +1,6 @@
 [project]
 name = "rent-radar"
-version = "1.6.1"
+version = "1.7"
 description = "Sistema automatizado de monitoreo de alquileres en portales inmobiliarios argentinos"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,7 +10,7 @@ dependencies = [
     "requests>=2.31.0",
     "beautifulsoup4>=4.12.0",
     "curl-cffi>=0.7.0",
-    "playwright>=1.6.14.0",
+    "playwright>=1.74.0",
     "playwright-stealth>=1.0.6",
     "psycopg2-binary>=2.9",
     "dbt-postgres>=1.8",
