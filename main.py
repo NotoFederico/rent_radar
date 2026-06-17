@@ -29,8 +29,12 @@ def run_ingest(source: str, start_urls: list[str], max_pages: int) -> None:
 		db.insert_snapshots(snapshot_rows)
 
 		run.listings_found = len(snapshot_rows)
-		run.status = "ok"
-		logging.info("Ingest OK | fuente=%s | publicaciones=%d", source, run.listings_found)
+		valid_count = sum(1 for r in snapshot_rows if r.get("precio") is not None)
+		run.status = "ok" if valid_count > 0 else "empty"
+		logging.info(
+			"Ingest %s | fuente=%s | publicaciones=%d (con precio=%d)",
+			run.status.upper(), source, run.listings_found, valid_count,
+		)
 	except Exception:
 		run.status = "error"
 		raise

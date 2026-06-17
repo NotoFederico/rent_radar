@@ -18,6 +18,7 @@ from app.models import Listing
 logger = logging.getLogger(__name__)
 
 MELI_LISTING_ID_PATTERN = re.compile(r"MLA-(\d+)")
+_LOGIN_GATE_KEYWORDS = ("ingresa a tu cuenta", "inicia sesión", "inicia sesion")
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -127,6 +128,7 @@ class MercadoLibreSpider:
         self._delay()
         try:
             self._page.click("[data-andes-pagination-control='next']")
+            self._dismiss_cookie_banner()
             try:
                 self._page.wait_for_selector("a.poly-component__title", timeout=15_000)
             except Exception:
@@ -215,6 +217,22 @@ class MercadoLibreSpider:
         Stealth().apply_stealth_sync(self._page)
         logger.info("Nuevo contexto listo")
 
+    def _dismiss_cookie_banner(self) -> None:
+        """Best-effort: cierra el banner de cookies si esta presente."""
+        try:
+            btn = self._page.get_by_text("Aceptar cookies", exact=False)
+            if btn.count() > 0:
+                btn.first.click(timeout=3_000)
+                self._page.wait_for_timeout(500)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _is_login_gate(soup: BeautifulSoup) -> bool:
+        """Detecta la pagina de 'ingresa a tu cuenta' que reemplaza los resultados de busqueda."""
+        text = soup.get_text(" ", strip=True).lower()
+        return any(kw in text for kw in _LOGIN_GATE_KEYWORDS)
+
     @staticmethod
     def _is_blocked(soup: BeautifulSoup) -> bool:
         """Detecta si MercadoLibre devolvio una pagina de captcha o verificacion."""
@@ -231,7 +249,7 @@ class MercadoLibreSpider:
     def _delay(self) -> None:
         time.sleep(random.uniform(self.config.delay_min, self.config.delay_max))
 
-    def _navigate_search(self, url: str) -> BeautifulSoup | None:
+    def _navigate_search(self, url: str, _retry: int = 0) -> BeautifulSoup | None:
         """Navega a una página de resultados y espera que React renderice los cards."""
         logger.info("Esperando delay anti-bot antes de cargar busqueda...")
         self._delay()
@@ -242,12 +260,25 @@ class MercadoLibreSpider:
                 logger.error("HTTP %d al pedir %s", resp.status, url)
                 return None
             logger.info("Pagina cargada (HTTP %d), esperando publicaciones...", resp.status if resp else 0)
+            self._dismiss_cookie_banner()
             try:
                 self._page.wait_for_selector("a.poly-component__title", timeout=15_000)
             except Exception:
                 logger.debug("wait_for_selector timeout, usando espera fija")
                 self._page.wait_for_timeout(3_000)
-            return BeautifulSoup(self._page.content(), "html.parser")
+            soup = BeautifulSoup(self._page.content(), "html.parser")
+
+            if not soup.select_one("a.poly-component__title") and self._is_login_gate(soup):
+                if _retry < 2:
+                    logger.warning(
+                        "Muro de login/cookies detectado, rotando contexto y reintentando (intento %d) | url=%s",
+                        _retry + 1, url,
+                    )
+                    self._restart_context()
+                    return self._navigate_search(url, _retry=_retry + 1)
+                logger.error("Muro de login persiste tras reintentos | url=%s", url)
+
+            return soup
         except Exception as exc:
             logger.error("Error navegando a %s: %s", url, exc)
             return None
@@ -264,6 +295,7 @@ class MercadoLibreSpider:
             if resp and resp.status >= 400:
                 logger.error("HTTP %d al pedir %s", resp.status, url)
                 return None
+            self._dismiss_cookie_banner()
             self._page.evaluate(f"window.scrollBy(0, {random.randint(200, 600)})")
             try:
                 self._page.wait_for_selector("h1", timeout=8_000)

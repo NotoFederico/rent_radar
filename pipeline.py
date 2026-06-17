@@ -1,9 +1,17 @@
 """
-Prefect flow principal de Rent Radar.
+Prefect flows de Rent Radar.
+
+ZonaProp y ArgenProp son rápidos y no tienen problemas de bloqueo, así que corren
+en el flow principal con cadencia corta. MercadoLibre usa Playwright (lento, ~20-30
+min cuando scrapea bien) y aplica bloqueos anti-bot si se lo golpea muy seguido, así
+que corre en su propio flow con un intervalo mucho más largo e independiente. dbt
+recoge la última corrida exitosa de cada fuente por separado (ver
+silver/publicaciones.sql), así que no hace falta que coincidan en el tiempo.
 
 Deploy (una sola vez, con el servidor y el pool ya creados):
     prefect work-pool create --type process local
-    prefect deploy pipeline.py:pipeline --name cada_35min --pool local --interval 2100
+    prefect deploy pipeline.py:pipeline --name cada_10min --pool local --interval 600
+    prefect deploy pipeline.py:mercadolibre_pipeline --name meli_cada_1h --pool local --interval 3600
 
 El worker levanta los runs; este archivo no necesita correr 24/7.
 """
@@ -71,10 +79,10 @@ def task_mapa() -> None:
 
 @flow(name="rent-radar", log_prints=True)
 def pipeline() -> None:
+    """ZonaProp + ArgenProp, transformación, detección, notificación y dashboard."""
     futures = [
         task_ingest_zonaprop.submit(),
         task_ingest_argenprop.submit(),
-        task_ingest_mercadolibre.submit(),
     ]
     for f in futures:
         f.result()
@@ -82,3 +90,9 @@ def pipeline() -> None:
     task_detect()
     task_notify()
     task_mapa()
+
+
+@flow(name="rent-radar-mercadolibre", log_prints=True)
+def mercadolibre_pipeline() -> None:
+    """MercadoLibre por separado, con su propia cadencia (ver deploy arriba)."""
+    task_ingest_mercadolibre()

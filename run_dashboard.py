@@ -70,6 +70,18 @@ def _pct(part, total, default=0) -> int:
     return round(part / total * 100)
 
 
+def _stale_badge(ts, threshold_min: int) -> str:
+    """Badge de alerta si el portal no trajo datos nuevos en threshold_min minutos."""
+    if not isinstance(ts, datetime):
+        return ""
+    ts_utc = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    elapsed_min = (datetime.now(timezone.utc) - ts_utc).total_seconds() / 60
+    if elapsed_min <= threshold_min:
+        return ""
+    label = f"hace {int(elapsed_min)} min" if elapsed_min < 60 else f"hace {elapsed_min / 60:.1f}h"
+    return f'<span class="fuente-stale" title="Sin datos nuevos desde {label}">⚠ {label}</span>'
+
+
 def build_ctx(rows: list[dict], m: dict) -> dict:
     """Construye el dict de variables para el template."""
     total = m.get("total_candidatas") or len(rows)
@@ -98,16 +110,16 @@ def build_ctx(rows: list[dict], m: dict) -> dict:
         bajas=_n(m.get("bajas_precio"), "0"),
         subas=_n(m.get("subas_precio"), "0"),
         off_market=_n(m.get("fuera_mercado"), "0"),
-        # precios ARS
-        precio_avg_ars=_p(m.get("precio_promedio_ars"), "ARS"),
+        # precios ARS (mediana, más robusta a outliers que el promedio)
+        precio_avg_ars=_p(m.get("precio_mediana_ars"), "ARS"),
         precio_min_ars=_p(m.get("precio_min_ars"), "ARS"),
         precio_max_ars=_p(m.get("precio_max_ars"), "ARS"),
-        bar_ars=_bar(m.get("precio_promedio_ars"), m.get("precio_min_ars"), m.get("precio_max_ars")),
-        # precios USD
-        precio_avg_usd=_p(m.get("precio_promedio_usd"), "USD"),
+        bar_ars=_bar(m.get("precio_mediana_ars"), m.get("precio_min_ars"), m.get("precio_max_ars")),
+        # precios USD (mediana)
+        precio_avg_usd=_p(m.get("precio_mediana_usd"), "USD"),
         precio_min_usd=_p(m.get("precio_min_usd"), "USD"),
         precio_max_usd=_p(m.get("precio_max_usd"), "USD"),
-        bar_usd=_bar(m.get("precio_promedio_usd"), m.get("precio_min_usd"), m.get("precio_max_usd")),
+        bar_usd=_bar(m.get("precio_mediana_usd"), m.get("precio_min_usd"), m.get("precio_max_usd")),
         # portales
         cnt_zonaprop=cnt_z,
         cnt_argenprop=cnt_a,
@@ -115,6 +127,9 @@ def build_ctx(rows: list[dict], m: dict) -> dict:
         bar_zonaprop=_pct(cnt_z, total),
         bar_argenprop=_pct(cnt_a, total),
         bar_mercadolibre=_pct(cnt_ml, total),
+        badge_zonaprop=_stale_badge(m.get("ultima_zonaprop"), 90),
+        badge_argenprop=_stale_badge(m.get("ultima_argenprop"), 90),
+        badge_mercadolibre=_stale_badge(m.get("ultima_mercadolibre"), 150),
     )
 
 
@@ -197,16 +212,17 @@ HTML_TEMPLATE = """\
 
   .fuentes-strip {{ background:var(--white); border:1px solid var(--border); border-radius:var(--radius); padding:11px 12px; display:flex; flex-direction:column; gap:7px; }}
   .fuente-row {{ display:flex; align-items:center; gap:8px; }}
-  .fuente-name {{ font-size:11.6px; font-weight:600; width:100px; }}
+  .fuente-name {{ font-size:11.7px; font-weight:600; width:100px; }}
   .fuente-track {{ flex:1; height:6px; background:var(--border); border-radius:6px; overflow:hidden; }}
   .fuente-fill {{ height:100%; border-radius:6px; }}
   .fuente-count {{ font-size:11px; font-weight:700; color:var(--muted); width:24px; text-align:right; }}
   .fill-zona  {{ background:#F59E0B; }}
   .fill-argen {{ background:#22C55E; }}
   .fill-ml    {{ background:#F97316; }}
+  .fuente-stale {{ font-size:9.5px; font-weight:700; color:#92400E; background:#FEF3C7; border:1px solid #FDE68A; border-radius:10px; padding:1px 6px; white-space:nowrap; }}
 
   .chips {{ display:flex; gap:6px; flex-wrap:wrap; }}
-  .chip {{ font-size:11px; font-weight:600; padding:4px 10px; border-radius:20px; border:1.6px solid transparent; cursor:pointer; transition:opacity .15s; }}
+  .chip {{ font-size:11px; font-weight:600; padding:4px 10px; border-radius:20px; border:1.7px solid transparent; cursor:pointer; transition:opacity .15s; }}
   .chip:not(.active) {{ opacity:.35; }}
   .chip-all   {{ background:#EEF2FF; color:var(--blue);  border-color:#C7D7FA; }}
   .chip-zona  {{ background:#FEF3C7; color:#92400E;      border-color:#FDE68A; }}
@@ -218,7 +234,7 @@ HTML_TEMPLATE = """\
   .prop-card:hover {{ box-shadow:0 2px 10px rgba(0,0,0,.08); border-color:#c5cfe8; }}
   .prop-card.selected {{ border-color:var(--blue); box-shadow:0 0 0 2px #c7d7fa; }}
   .prop-top {{ display:flex; align-items:flex-start; justify-content:space-between; gap:6px; }}
-  .prop-titulo {{ font-size:12.5px; font-weight:600; line-height:1.65; flex:1; }}
+  .prop-titulo {{ font-size:12.5px; font-weight:600; line-height:1.75; flex:1; }}
   .prop-badge {{ font-size:10px; font-weight:700; padding:2px 7px; border-radius:20px; white-space:nowrap; flex-shrink:0; margin-top:1px; }}
   .prop-precio {{ font-size:14px; font-weight:700; }}
   .prop-detalle {{ font-size:11px; color:var(--muted); }}
@@ -238,11 +254,11 @@ HTML_TEMPLATE = """\
   .mk-PRICE_UP   {{ background:#DC2626; }}
   .mk-ref {{ width:24px; height:24px; border-radius:50%; background:#FBBF24; border:3px solid white; box-shadow:0 2px 10px rgba(0,0,0,.4); }}
 
-  .popup-titulo {{ font-weight:700; font-size:13px; margin-bottom:4px; line-height:1.6; }}
+  .popup-titulo {{ font-weight:700; font-size:13px; margin-bottom:4px; line-height:1.7; }}
   .popup-precio {{ font-size:15px; font-weight:800; color:var(--blue); margin-bottom:3px; }}
-  .popup-det    {{ font-size:11.6px; color:#555; margin-bottom:2px; }}
+  .popup-det    {{ font-size:11.7px; color:#555; margin-bottom:2px; }}
   .popup-loc    {{ font-size:11px; color:#888; margin-bottom:7px; }}
-  .leaflet-popup-content .popup-link {{ display:inline-block; font-size:11.6px; font-weight:600; color:white !important; background:var(--blue); padding:4px 12px; border-radius:6px; text-decoration:none; }}
+  .leaflet-popup-content .popup-link {{ display:inline-block; font-size:11.7px; font-weight:600; color:white !important; background:var(--blue); padding:4px 12px; border-radius:6px; text-decoration:none; }}
   .leaflet-popup-content {{ min-width:190px; }}
 
   .c-blue   {{ color:var(--blue); }}
@@ -265,7 +281,7 @@ HTML_TEMPLATE = """\
   <div class="nav-spacer"></div>
   <span class="nav-credit">by Federico Noto</span>
   <div class="nav-sep"></div>
-  <div class="nav-tg"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.624 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg> Notificaciones vía Telegram</div>
+  <div class="nav-tg"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.753-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.724 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.727 4.476-1.735z"/></svg> Notificaciones vía Telegram</div>
 </nav>
 
 <div class="layout">
@@ -322,7 +338,7 @@ HTML_TEMPLATE = """\
       <span class="ev-label">Off-market</span>
     </div>
   </div>
-  <div class="section-label">Precios</div>
+  <div class="section-label">Precios (mediana)</div>
   <div class="precios-strip">
     <div class="precio-row">
       <span class="precio-moneda moneda-ars">ARS</span>
@@ -352,16 +368,19 @@ HTML_TEMPLATE = """\
       <span class="fuente-name">ZonaProp</span>
       <div class="fuente-track"><div class="fuente-fill fill-zona" style="width:{bar_zonaprop}%"></div></div>
       <span class="fuente-count">{cnt_zonaprop}</span>
+      {badge_zonaprop}
     </div>
     <div class="fuente-row">
       <span class="fuente-name">ArgenProp</span>
       <div class="fuente-track"><div class="fuente-fill fill-argen" style="width:{bar_argenprop}%"></div></div>
       <span class="fuente-count">{cnt_argenprop}</span>
+      {badge_argenprop}
     </div>
     <div class="fuente-row">
       <span class="fuente-name">MercadoLibre</span>
       <div class="fuente-track"><div class="fuente-fill fill-ml" style="width:{bar_mercadolibre}%"></div></div>
       <span class="fuente-count">{cnt_mercadolibre}</span>
+      {badge_mercadolibre}
     </div>
   </div>
 
