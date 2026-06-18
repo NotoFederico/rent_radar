@@ -77,6 +77,11 @@ def task_mapa() -> None:
     _run("run_dashboard.py")
 
 
+@task(name="check-health")
+def task_check_health() -> None:
+    _run("check_health.py")
+
+
 @flow(name="rent-radar", log_prints=True)
 def pipeline() -> None:
     """ZonaProp + ArgenProp, transformación, detección, notificación y dashboard."""
@@ -90,6 +95,7 @@ def pipeline() -> None:
     task_detect()
     task_notify()
     task_mapa()
+    task_check_health()
 
 
 @flow(name="rent-radar-mercadolibre", log_prints=True)

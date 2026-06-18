@@ -8,7 +8,7 @@
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.7-blue)
+![Version](https://img.shields.io/badge/version-1.8-blue)
 
 ---
 
@@ -116,6 +116,9 @@ Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página d
 **Timeout de inactividad por spider**
 `run_ingest.py` monitorea la última actividad de cada spider. Si un proceso lleva más de 120 segundos sin emitir resultados, se lo termina forzosamente para no bloquear el pipeline completo.
 
+**Alerta de fuente desactualizada**
+`check_health.py` corre al final de cada pipeline y usa los mismos umbrales que el badge "desactualizado" del dashboard (90 min ZonaProp/ArgenProp, 150 min MercadoLibre) para avisar por Telegram cuando una fuente deja de tener corridas `ok`. La alerta se manda una sola vez por episodio (`silver.health_alerts` guarda el estado) y se avisa también cuando la fuente se recupera, para no spamear cada 10 minutos mientras el bloqueo persiste.
+
 ---
 
 ## Instalación
@@ -140,6 +143,7 @@ Crear un proyecto en Neon y aplicar las migraciones en orden:
 ```bash
 psql $NEON_DATABASE_URL -f sql/001_init_schemas.sql
 psql $NEON_DATABASE_URL -f sql/002_silver_events.sql
+psql $NEON_DATABASE_URL -f sql/003_health_alerts.sql
 ```
 
 ### Variables de entorno
