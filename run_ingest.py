@@ -24,7 +24,7 @@ SOURCES: list[Source] = [
         name="zonaprop",
         max_pages=20,
         urls=[
-            "https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-mataderos-villa-luzuriaga-ramos-mejia-haedo-san-justo-la-matanza-ciudadela-tres-de-febrero-villa-sarmiento-moron-desde-3-hasta-5-ambientes-mas-de-1-garage-mas-70-m2-cubiertos.html",
+            "https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-mataderos-villa-luzuriaga-ramos-mejia-haedo-san-justo-la-matanza-ciudadela-tres-de-febrero-villa-sarmiento-moron-desde-3-hasta-5-ambientes-mas-de-1-garage-mas-70-m2-cubiertos-orden-publicado-descendente.html",
             #"https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-mataderos-villa-luro-caballito-naon-mataderos-desde-3-hasta-5-ambientes-mas-de-1-garage-mas-70-m2-cubiertos.html",
         ],
     ),
@@ -32,7 +32,7 @@ SOURCES: list[Source] = [
         name="argenprop",
         max_pages=20,
         urls=[
-            "https://www.argenprop.com/casas-o-departamentos-o-ph/alquiler/haedo-o-ramos-mejia-o-san-justo-la-matanza-o-villa-luzuriaga-o-villa-sarmiento/3-ambientes-o-4-ambientes-o-5-o-mas-ambientes?1-o-mas-cocheras",
+            "https://www.argenprop.com/casas-o-departamentos-o-ph/alquiler/haedo-o-ramos-mejia-o-san-justo-la-matanza-o-villa-luzuriaga-o-villa-sarmiento/3-ambientes-o-4-ambientes-o-5-o-mas-ambientes?1-o-mas-cocheras&orden-masnuevos-descendente",
             #"https://www.argenprop.com/casas-o-departamentos-o-ph/alquiler/caballito-o-mataderos-o-villa-luro/3-ambientes-o-4-ambientes-o-5-o-mas-ambientes?1-o-mas-cocheras",
         ],
     ),

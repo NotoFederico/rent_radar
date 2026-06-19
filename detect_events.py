@@ -28,16 +28,21 @@ if not DATABASE_URL:
 
 FUENTES = ["zonaprop", "argenprop", "mercadolibre"]
 
-# Ausencias consecutivas requeridas antes de emitir OFF_MARKET.
-# Con runs cada 45 min: 3 ausencias = ~2h15m mínimo antes de notificar.
-CONSECUTIVE_OFF_ABSENCES = 3
+# Tiempo real de ausencia continua requerido antes de emitir OFF_MARKET.
+# No usamos "N corridas seguidas": zonaprop/argenprop corren cada ~10 min y
+# argenprop reordena resultados durante la paginación (avisos que se ven
+# duplicados en una página y salteados en otra dentro de la misma corrida),
+# lo que genera ausencias de 1-2 corridas sin que la propiedad haya salido
+# del mercado. Un umbral en horas reales no depende de cuán seguido corre
+# cada spider.
+OFF_MARKET_MIN_HOURS = 2.0
 
 
-def get_last_runs(cur: psycopg2.extensions.cursor, fuente: str, n: int = 3) -> list[str]:
-    """Retorna los últimos N runs exitosos (más reciente primero)."""
+def get_last_runs(cur: psycopg2.extensions.cursor, fuente: str, n: int = 2) -> list[dict]:
+    """Retorna los últimos N runs exitosos (más reciente primero), con id y timestamp."""
     cur.execute(
         """
-        SELECT id_ejecucion
+        SELECT id_ejecucion, finalizado_en
         FROM raw.pipeline_runs
         WHERE fuente = %s AND estado = 'ok'
         ORDER BY finalizado_en DESC
@@ -45,7 +50,45 @@ def get_last_runs(cur: psycopg2.extensions.cursor, fuente: str, n: int = 3) -> l
         """,
         (fuente, n),
     )
-    return [r["id_ejecucion"] for r in cur.fetchall()]
+    return cur.fetchall()
+
+
+def get_off_market_reference(
+    cur: psycopg2.extensions.cursor, fuente: str, before, min_hours: float
+) -> dict | None:
+    """Corrida 'ok' más reciente que sea al menos `min_hours` más vieja que `before`.
+
+    Sirve como punto de referencia: si la propiedad estaba ahí y no aparece en
+    ninguna corrida desde entonces hasta `before`, pasaron >= min_hours de
+    ausencia continua real.
+    """
+    cur.execute(
+        """
+        SELECT id_ejecucion, finalizado_en
+        FROM raw.pipeline_runs
+        WHERE fuente = %s AND estado = 'ok'
+          AND finalizado_en <= %s - (%s * interval '1 hour')
+        ORDER BY finalizado_en DESC
+        LIMIT 1
+        """,
+        (fuente, before, min_hours),
+    )
+    return cur.fetchone()
+
+
+def get_ids_since(cur: psycopg2.extensions.cursor, fuente: str, after, upto) -> set[str]:
+    """IDs vistos en cualquier corrida 'ok' de esta fuente en el rango (after, upto]."""
+    cur.execute(
+        """
+        SELECT DISTINCT s.id_publicacion
+        FROM raw.snapshots s
+        JOIN raw.pipeline_runs pr ON pr.id_ejecucion = s.id_ejecucion
+        WHERE pr.fuente = %s AND pr.estado = 'ok'
+          AND pr.finalizado_en > %s AND pr.finalizado_en <= %s
+        """,
+        (fuente, after, upto),
+    )
+    return {r["id_publicacion"] for r in cur.fetchall()}
 
 
 def get_snapshots(cur: psycopg2.extensions.cursor, id_ejecucion: str) -> dict[str, dict]:
@@ -93,14 +136,16 @@ def detect(
     fuente: str,
     run_b: str,
     snaps_ref: dict[str, dict] | None = None,
-    newer_ids_list: list[set[str]] | None = None,
+    recent_ids: set[str] | None = None,
     ever_seen: set[str] | None = None,
 ) -> list[dict]:
     """
     snaps_a / snaps_b: par más reciente para NEW / PRICE / EXPENSES comparisons.
-    snaps_ref: run de referencia (el más viejo) donde la propiedad existía.
-    newer_ids_list: IDs de todos los runs más recientes que snaps_ref.
-      OFF_MARKET se emite solo si la propiedad está en snaps_ref pero ausente en TODOS newer_ids_list.
+    snaps_ref: snapshot de la corrida de referencia, al menos OFF_MARKET_MIN_HOURS más
+      vieja que la corrida actual, donde la propiedad existía.
+    recent_ids: unión de IDs vistos en cualquier corrida entre snaps_ref y la actual.
+      OFF_MARKET se emite solo si la propiedad está en snaps_ref pero ausente de recent_ids
+      (es decir, ausente durante todo ese período, no solo en la última corrida).
     ever_seen: IDs ya vistos en cualquier run anterior a run_b. NEW solo se emite si no está aquí.
     """
     events: list[dict] = []
@@ -132,15 +177,12 @@ def detect(
         e["precio_nuevo"] = snaps_b[pid].get("precio")
         events.append(e)
 
-    # OFF_MARKET — ausente en CONSECUTIVE_OFF_ABSENCES runs consecutivos.
-    # snaps_ref es el run más viejo (donde existía); newer_ids_list son todos los runs
-    # más recientes. Solo se emite si la propiedad está ausente en todos ellos.
-    if snaps_ref is not None and newer_ids_list is not None:
-        confirmed_off = set(snaps_ref)
-        for recent_ids in newer_ids_list:
-            confirmed_off -= recent_ids
+    # OFF_MARKET — ausente desde snaps_ref (>= OFF_MARKET_MIN_HOURS atrás) hasta ahora,
+    # en TODAS las corridas intermedias (recent_ids es la unión de IDs vistos en ese período).
+    if snaps_ref is not None and recent_ids is not None:
+        confirmed_off = set(snaps_ref) - recent_ids
     else:
-        confirmed_off = ids_a - ids_b  # fallback si no hay suficientes runs
+        confirmed_off = ids_a - ids_b  # fallback si no hay suficiente historial
 
     for pid in confirmed_off:
         snap = snaps_ref.get(pid) if snaps_ref else snaps_a.get(pid, {})
@@ -219,13 +261,13 @@ def main() -> None:
     total = 0
 
     for fuente in FUENTES:
-        n_needed = CONSECUTIVE_OFF_ABSENCES + 1
-        runs = get_last_runs(cur, fuente, n=n_needed)
+        runs = get_last_runs(cur, fuente, n=2)
         if len(runs) < 2:
             print(f"  {fuente}: sin corrida anterior, saltando")
             continue
 
-        run_b, run_a = runs[0], runs[1]
+        run_b, run_a = runs[0]["id_ejecucion"], runs[1]["id_ejecucion"]
+        run_b_ts = runs[0]["finalizado_en"]
 
         print(f"  {fuente}: {run_a[:8]}… → {run_b[:8]}…", end="", flush=True)
 
@@ -234,15 +276,16 @@ def main() -> None:
         silver_ids = get_silver_ids(cur, fuente)
         ever_seen = get_ever_seen_ids(cur, fuente, run_b)
 
-        # OFF_MARKET: runs[-1] es el más viejo (referencia); runs[:-1] son los más recientes
-        if len(runs) >= n_needed:
-            snaps_ref = get_snapshots(cur, runs[-1])
-            newer_ids_list = [set(get_snapshots(cur, r)) for r in runs[:-1]]
+        # OFF_MARKET: referencia = corrida >= OFF_MARKET_MIN_HOURS más vieja que run_b.
+        ref_run = get_off_market_reference(cur, fuente, run_b_ts, OFF_MARKET_MIN_HOURS)
+        if ref_run:
+            snaps_ref = get_snapshots(cur, ref_run["id_ejecucion"])
+            recent_ids = get_ids_since(cur, fuente, ref_run["finalizado_en"], run_b_ts)
         else:
             snaps_ref = None
-            newer_ids_list = None
+            recent_ids = None
 
-        events = detect(snaps_a, snaps_b, silver_ids, fuente, run_b, snaps_ref, newer_ids_list, ever_seen)
+        events = detect(snaps_a, snaps_b, silver_ids, fuente, run_b, snaps_ref, recent_ids, ever_seen)
 
         if not events:
             print(" — sin cambios")

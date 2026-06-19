@@ -24,16 +24,18 @@ with candidatas_stats as (
 ),
 
 eventos_recientes as (
-    -- Eventos de la última corrida (~2 intervalos de seguridad)
+    -- Eventos acumulados desde la medianoche en horario argentino (no una ventana
+    -- deslizante): así el dashboard no "pierde" eventos entre refrescos.
     select
-        count(*) filter (where tipo_evento = 'NEW')              as nuevas_ultima_corrida,
+        count(*) filter (where tipo_evento = 'NEW')              as nuevas_hoy,
         count(*) filter (where tipo_evento = 'PRICE_DOWN')       as bajas_precio,
         count(*) filter (where tipo_evento = 'PRICE_UP')         as subas_precio,
         count(*) filter (where tipo_evento = 'OFF_MARKET')       as fuera_mercado,
         count(*) filter (where tipo_evento = 'EXPENSES_CHANGE')  as cambios_expensas,
         count(*) filter (where tipo_evento = 'CURRENCY_CHANGE')  as cambios_moneda
     from silver.events
-    where detectado_en >= now() - interval '90 minutes'
+    where detectado_en >= date_trunc('day', now() AT TIME ZONE 'America/Argentina/Buenos_Aires')
+                            AT TIME ZONE 'America/Argentina/Buenos_Aires'
 ),
 
 rechazadas_stats as (
