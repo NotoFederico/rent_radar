@@ -21,7 +21,7 @@ def fetch_listings() -> list[dict]:
     conn = psycopg2.connect(DATABASE_URL)
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("""
-            select titulo, url, precio, moneda, fuente,
+            select id_publicacion, titulo, url, precio, moneda, fuente,
                    ambientes, superficie_cubierta, superficie_total,
                    cocheras, antiguedad, ubicacion, latitud, longitud
             from gold.candidatas
@@ -30,6 +30,90 @@ def fetch_listings() -> list[dict]:
         rows = [dict(r) for r in cur.fetchall()]
     conn.close()
     return rows
+
+
+def attach_price_history(rows: list[dict]) -> None:
+    """Agrega `historial` (lista de precios cronológica) a cada row, in-place.
+
+    Solo incluye puntos con la misma moneda que el precio actual: un cambio
+    de moneda en el medio haría que la línea se vea como un salto gigante
+    sin serlo en términos reales.
+    """
+    if not rows:
+        return
+    pairs = [(r["fuente"], r["id_publicacion"]) for r in rows]
+
+    conn = psycopg2.connect(DATABASE_URL)
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # fetch=True es necesario: execute_values pagina `pairs` de a 100 (default
+        # page_size) y sin fetch=True cada página pisa el resultado de la anterior,
+        # así que cur.fetchall() después solo devolvía la última página.
+        result = psycopg2.extras.execute_values(
+            cur,
+            """
+            select s.fuente, s.id_publicacion, s.precio, s.moneda, s.fecha_scraping
+            from raw.snapshots s
+            join (values %s) as v(fuente, id_publicacion)
+              on s.fuente = v.fuente and s.id_publicacion = v.id_publicacion
+            where s.precio is not null
+            order by s.fuente, s.id_publicacion, s.fecha_scraping
+            """,
+            pairs,
+            fetch=True,
+        )
+        history: dict[tuple[str, str], list[dict]] = {}
+        for r in result:
+            key = (r["fuente"], r["id_publicacion"])
+            history.setdefault(key, []).append(r)
+    conn.close()
+
+    for row in rows:
+        puntos = history.get((row["fuente"], row["id_publicacion"]), [])
+        puntos = [p for p in puntos if p["moneda"] == row["moneda"]]
+        row["historial"] = [p["precio"] for p in puntos] if len(puntos) > 1 else []
+
+
+def attach_flags(rows: list[dict]) -> None:
+    """Agrega `estado` ('interesa' | 'descartada' | None) a cada row, in-place.
+
+    Es solo el valor "horneado" al momento de generar el HTML; el frontend
+    además pide /api/estados al cargar para no perder marcas hechas en el
+    intervalo entre regeneraciones (ver Handler.do_GET más abajo).
+    """
+    flags = fetch_flags()
+    for row in rows:
+        row["estado"] = flags.get((row["fuente"], row["id_publicacion"]))
+
+
+def fetch_flags() -> dict[tuple[str, str], str]:
+    conn = psycopg2.connect(DATABASE_URL)
+    with conn.cursor() as cur:
+        cur.execute("select fuente, id_publicacion, estado from silver.property_flags")
+        flags = {(f, i): e for f, i, e in cur.fetchall()}
+    conn.close()
+    return flags
+
+
+def set_flag(fuente: str, id_publicacion: str, estado: str | None) -> None:
+    conn = psycopg2.connect(DATABASE_URL)
+    with conn.cursor() as cur:
+        if estado:
+            cur.execute(
+                """
+                insert into silver.property_flags (fuente, id_publicacion, estado)
+                values (%s, %s, %s)
+                on conflict (fuente, id_publicacion)
+                do update set estado = excluded.estado, actualizado_en = now()
+                """,
+                (fuente, id_publicacion, estado),
+            )
+        else:
+            cur.execute(
+                "delete from silver.property_flags where fuente = %s and id_publicacion = %s",
+                (fuente, id_publicacion),
+            )
+    conn.commit()
+    conn.close()
 
 
 def fetch_metricas() -> dict:
@@ -105,8 +189,8 @@ def build_ctx(rows: list[dict], m: dict) -> dict:
         sup_promedio=_n(m.get("sup_promedio_m2"), "—"),
         ambientes_promedio=str(m.get("ambientes_promedio") or "—"),
         con_cochera=_n(m.get("con_cochera"), "—"),
-        # eventos
-        nuevas=_n(m.get("nuevas_ultima_corrida"), "0"),
+        # eventos (acumulados desde la medianoche ART)
+        nuevas=_n(m.get("nuevas_hoy"), "0"),
         bajas=_n(m.get("bajas_precio"), "0"),
         subas=_n(m.get("subas_precio"), "0"),
         off_market=_n(m.get("fuera_mercado"), "0"),
@@ -258,8 +342,18 @@ HTML_TEMPLATE = """\
   .popup-precio {{ font-size:15px; font-weight:800; color:var(--blue); margin-bottom:3px; }}
   .popup-det    {{ font-size:11.7px; color:#555; margin-bottom:2px; }}
   .popup-loc    {{ font-size:11px; color:#888; margin-bottom:7px; }}
+  .popup-spark  {{ display:block; margin-bottom:7px; }}
+  .popup-actions {{ display:flex; gap:6px; margin-bottom:7px; }}
+  .popup-act-btn {{ flex:1; font-size:11px; font-weight:600; padding:4px 6px; border-radius:6px; border:1.5px solid var(--border); background:var(--white); cursor:pointer; text-align:center; }}
+  .popup-act-btn.act-interesa.active   {{ background:#DCFCE7; border-color:#86EFAC; color:#166534; }}
+  .popup-act-btn.act-descartada.active {{ background:#FEE2E2; border-color:#FCA5A5; color:#991B1B; }}
   .leaflet-popup-content .popup-link {{ display:inline-block; font-size:11.7px; font-weight:600; color:white !important; background:var(--blue); padding:4px 12px; border-radius:6px; text-decoration:none; }}
   .leaflet-popup-content {{ min-width:190px; }}
+
+  .mk-interesa    {{ background:var(--green) !important; }}
+  .mk-descartada  {{ opacity:.35; filter:grayscale(.6); }}
+  .prop-card.estado-interesa   {{ border-left:3px solid var(--green); }}
+  .prop-card.estado-descartada {{ opacity:.5; }}
 
   .c-blue   {{ color:var(--blue); }}
   .c-green  {{ color:var(--green); }}
@@ -315,7 +409,7 @@ HTML_TEMPLATE = """\
     </div>
   </div>
 
-  <div class="section-label">Última corrida</div>
+  <div class="section-label">Eventos de hoy</div>
   <div class="eventos-strip">
     <div class="evento-chip">
       <span class="ev-icon">✨</span>
@@ -423,6 +517,66 @@ function fmtDet(p) {{
     p.antiguedad === 0   ? "a estrenar"               : p.antiguedad ? `${{p.antiguedad}} años` : null,
   ].filter(Boolean).join(" · ");
 }}
+function sparkline(historial) {{
+  if (!historial || historial.length < 2) return "";
+  const w = 160, h = 26, pad = 3;
+  const min = Math.min(...historial), max = Math.max(...historial);
+  const span = max - min || 1;
+  const pts = historial.map((v, i) => {{
+    const x = pad + (i / (historial.length - 1)) * (w - pad * 2);
+    const y = pad + (1 - (v - min) / span) * (h - pad * 2);
+    return `${{x.toFixed(1)}},${{y.toFixed(1)}}`;
+  }});
+  const subio = historial[historial.length - 1] > historial[0];
+  const bajo = historial[historial.length - 1] < historial[0];
+  const color = subio ? "#DC2626" : bajo ? "#16A34A" : "#6B7280";
+  return `<svg class="popup-spark" width="${{w}}" height="${{h}}" viewBox="0 0 ${{w}} ${{h}}">
+    <polyline points="${{pts.join(" ")}}" fill="none" stroke="${{color}}" stroke-width="1.7"/>
+  </svg>`;
+}}
+
+// ── Estados ("me interesa" / "descartada"), persistidos en la base ──
+// DATOS[i].estado trae lo que había al generar el HTML; /api/estados se pide
+// al cargar para no perder marcas hechas en el intervalo entre regeneraciones.
+const keyOf = p => `${{p.fuente}}:${{p.id_publicacion}}`;
+const estados = {{}};
+DATOS.forEach(p => {{ if (p.estado) estados[keyOf(p)] = p.estado; }});
+
+async function setEstado(i, valor) {{
+  const p = DATOS[i];
+  const k = keyOf(p);
+  const nuevo = estados[k] === valor ? null : valor;
+  estados[k] = nuevo;
+  if (!nuevo) delete estados[k];
+  aplicarEstado(i);
+  markers[i].getPopup().setContent(popupHtml(i));
+  try {{
+    const r = await fetch("/api/estado", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ fuente: p.fuente, id_publicacion: p.id_publicacion, estado: nuevo }}),
+    }});
+    if (!r.ok) throw new Error(`HTTP ${{r.status}}`);
+  }} catch (e) {{
+    console.error("No se pudo guardar el estado:", e);
+  }}
+}}
+
+function aplicarEstado(i) {{
+  const p = DATOS[i];
+  const estado = estados[keyOf(p)];
+  markers[i].setIcon(mkIcon(p.evento, estado));
+  cards[i].classList.remove("estado-interesa", "estado-descartada");
+  if (estado) cards[i].classList.add(`estado-${{estado}}`);
+}}
+
+fetch("/api/estados").then(r => r.ok ? r.json() : {{}}).then(fresh => {{
+  Object.assign(estados, fresh);
+  DATOS.forEach((p, i) => {{
+    if (!(keyOf(p) in fresh)) delete estados[keyOf(p)];
+    aplicarEstado(i);
+  }});
+}}).catch(e => console.error("No se pudo refrescar /api/estados:", e));
 
 // ── Mapa ──
 const mapa = L.map("mapa");
@@ -435,22 +589,32 @@ L.marker([-34.6662631, -58.5766229], {{
   icon: L.divIcon({{ className:"", html:'<div class="mk-ref"></div>', iconSize:[24,24], iconAnchor:[12,12] }})
 }}).bindPopup("<b>Referencia</b><br/>Dr. Ignacio Arieta 1638, Villa Luzuriaga").addTo(mapa);
 
-const mkIcon = ev => L.divIcon({{
+const mkIcon = (ev, estado) => L.divIcon({{
   className:"",
-  html: `<div class="mk mk-${{ev || 'default'}}"></div>`,
+  html: `<div class="mk mk-${{ev || 'default'}} ${{estado ? 'mk-' + estado : ''}}"></div>`,
   iconSize:[26,26], iconAnchor:[13,26],
 }});
 
-const markers = DATOS.map(p => {{
-  const popup = `
+function popupHtml(i) {{
+  const p = DATOS[i];
+  const estado = estados[keyOf(p)];
+  return `
     <div class="popup-titulo">${{p.titulo}}</div>
     <div class="popup-precio">${{fmtPrecio(p.precio, p.moneda)}}/mes</div>
     <div class="popup-det">${{fmtDet(p)}}</div>
+    ${{sparkline(p.historial)}}
     ${{p.ubicacion ? `<div class="popup-loc">📍 ${{p.ubicacion}}</div>` : ""}}
+    <div class="popup-actions">
+      <span class="popup-act-btn act-interesa ${{estado === 'interesa' ? 'active' : ''}}" onclick="setEstado(${{i}},'interesa')">⭐ Me interesa</span>
+      <span class="popup-act-btn act-descartada ${{estado === 'descartada' ? 'active' : ''}}" onclick="setEstado(${{i}},'descartada')">🚫 Descartar</span>
+    </div>
     <a class="popup-link" href="${{p.url}}" target="_blank">Ver propiedad →</a>
   `;
-  return L.marker([p.latitud, p.longitud], {{ icon: mkIcon(p.evento) }})
-    .bindPopup(popup).addTo(mapa);
+}}
+
+const markers = DATOS.map((p, i) => {{
+  return L.marker([p.latitud, p.longitud], {{ icon: mkIcon(p.evento, estados[keyOf(p)]) }})
+    .bindPopup(() => popupHtml(i)).addTo(mapa);
 }});
 
 if (DATOS.length) {{
@@ -490,6 +654,7 @@ DATOS.forEach((p, i) => {{
   }});
   lista.appendChild(card);
   cards.push(card);
+  aplicarEstado(i);
 }});
 
 // ── Filtros ──
@@ -558,6 +723,12 @@ def main() -> None:
     rows = fetch_listings()
     print(f"  {len(rows)} propiedades encontradas")
 
+    print("Consultando historial de precios…")
+    attach_price_history(rows)
+
+    print("Consultando marcas (me interesa / descartada)…")
+    attach_flags(rows)
+
     print("Consultando gold.metricas…")
     metricas = fetch_metricas()
     if not metricas:
@@ -575,9 +746,19 @@ def main() -> None:
         import http.server
         import socketserver
 
+        ESTADOS_VALIDOS = {"interesa", "descartada"}
+
         class Handler(http.server.SimpleHTTPRequestHandler):
             def log_message(self, *a):
                 pass
+
+            def _json(self, status: int, payload: dict) -> None:
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
 
             def do_GET(self):
                 if self.path == "/mtime":
@@ -591,8 +772,31 @@ def main() -> None:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
+                elif self.path == "/api/estados":
+                    flags = fetch_flags()
+                    self._json(200, {f"{f}:{i}": e for (f, i), e in flags.items()})
                 else:
                     super().do_GET()
+
+            def do_POST(self):
+                if self.path != "/api/estado":
+                    self._json(404, {"error": "not found"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length))
+                    fuente = body["fuente"]
+                    id_publicacion = body["id_publicacion"]
+                    estado = body.get("estado")
+                    if not isinstance(fuente, str) or not isinstance(id_publicacion, str):
+                        raise ValueError("fuente/id_publicacion deben ser texto")
+                    if estado is not None and estado not in ESTADOS_VALIDOS:
+                        raise ValueError(f"estado inválido: {estado!r}")
+                except (ValueError, KeyError, json.JSONDecodeError) as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
+                set_flag(fuente, id_publicacion, estado)
+                self._json(200, {"ok": True})
 
         ip = get_local_ip()
         print(f"\n  Servidor en http://{ip}:{args.port}/dashboard.html")

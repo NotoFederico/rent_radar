@@ -8,7 +8,7 @@
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.7-blue)
+![Version](https://img.shields.io/badge/version-1.11.1-blue)
 
 ---
 
@@ -48,6 +48,7 @@ flowchart TD
             AP["ArgenProp · requests"]:::spider
         end
         DBT["dbt run · run_dbt.py"]:::process
+        GEO["geocode_fallback.py"]:::process
         DE["detect_events.py"]:::process
         NO["notify.py"]:::process
         GM["run_dashboard.py"]:::process
@@ -63,6 +64,8 @@ flowchart TD
     RAW --> DBT
     DBT --> SIL
     SIL --> GOLD
+    DBT --> GEO
+    GEO -.->|silver.coordenadas_override, próximo run| DBT
     GOLD --> DE
     DE --> EV
     EV --> NO
@@ -76,7 +79,7 @@ flowchart TD
 | Schema | Tablas | Descripción |
 |--------|--------|-------------|
 | `raw` | `pipeline_runs`, `snapshots` | Salida directa de los spiders |
-| `silver` | `publicaciones`, `publicaciones_rechazadas`, `events`, `notifications` | Datos limpios + auditoría |
+| `silver` | `publicaciones`, `publicaciones_rechazadas`, `events`, `notifications`, `health_alerts`, `property_flags`, `coordenadas_override`, `coordenadas_no_resueltas` | Datos limpios + auditoría |
 | `gold` | `candidatas`, `metricas` | Propiedades filtradas por presupuesto y criterios · métricas de la última corrida |
 
 ---
@@ -98,11 +101,11 @@ flowchart TD
 
 ## Decisiones técnicas destacadas
 
-**Deduplicación cross-portal**
-La misma propiedad puede aparecer en ZonaProp, ArgenProp y MercadoLibre simultáneamente. `silver/publicaciones.sql` detecta duplicados por bucket geográfico (±0.001° lat/lon), ambientes, moneda y precio (±10%), y los consolida en una sola fila.
+**Deduplicación cross-portal y dentro del mismo portal**
+La misma propiedad puede aparecer en ZonaProp, ArgenProp y MercadoLibre simultáneamente, o repostearse dos veces en el mismo portal (inmobiliarias que vuelven a publicar el mismo aviso con otro id). `silver/publicaciones.sql` detecta ambos casos con el mismo criterio: bucket geográfico (±0.001° lat/lon), ambientes, moneda y precio (±10%), y consolida en una sola fila quedándose con la de especificaciones más completas.
 
-**OFF_MARKET con ventana de 3 runs**
-Una propiedad marcada como no disponible después de ausencia en una sola corrida generaría muchos falsos positivos (los portales reordenan resultados constantemente). El evento `OFF_MARKET` solo se emite si la propiedad estuvo ausente en las últimas 3 corridas consecutivas *de esa fuente* — `detect_events.py` mide la ventana en corridas, no en tiempo fijo, así que se adapta sola a la cadencia de cada portal (10 min en ZonaProp/ArgenProp, 1h en MercadoLibre).
+**OFF_MARKET con ventana de tiempo real, no de corridas**
+Marcar como no disponible a una propiedad ausente en una sola corrida genera falsos positivos: ZonaProp reordena resultados en vivo (avisos destacados que rotan) mientras el spider pagina, así que una propiedad puede faltar 1-2 corridas sin haberse dado de baja. `detect_events.py` exige `OFF_MARKET_MIN_HOURS` (2 horas) de ausencia continua confirmada en *todas* las corridas intermedias antes de emitir `OFF_MARKET`, en vez de contar un número fijo de corridas — así el margen no depende de la cadencia de cada portal (10 min en ZonaProp/ArgenProp, ~1h en MercadoLibre) y no hay que recalibrarlo si esa cadencia cambia.
 
 **MercadoLibre en un flow propio**
 Playwright scrapea MercadoLibre con delays anti-bot que pueden llevar 20-30 minutos, y el portal aplica bloqueos si se lo golpea con la misma frecuencia que los otros dos. Por eso corre en su propio flow de Prefect (`mercadolibre_pipeline`) con un intervalo independiente, sin bloquear la cadencia rápida del resto del pipeline.
@@ -115,6 +118,18 @@ Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página d
 
 **Timeout de inactividad por spider**
 `run_ingest.py` monitorea la última actividad de cada spider. Si un proceso lleva más de 120 segundos sin emitir resultados, se lo termina forzosamente para no bloquear el pipeline completo.
+
+**Alerta de fuente desactualizada**
+`check_health.py` corre al final de cada pipeline y usa los mismos umbrales que el badge "desactualizado" del dashboard (90 min ZonaProp/ArgenProp, 150 min MercadoLibre) para avisar por Telegram cuando una fuente deja de tener corridas `ok`. La alerta se manda una sola vez por episodio (`silver.health_alerts` guarda el estado) y se avisa también cuando la fuente se recupera, para no spamear cada 10 minutos mientras el bloqueo persiste.
+
+**Sparkline de precio sin tabla nueva**
+El popup de cada propiedad en el mapa muestra un mini-gráfico con el historial de precio, armado a partir de `raw.snapshots` (no hace falta una tabla histórica nueva: cada corrida ya guarda su propio snapshot). Solo se grafican los puntos con la misma moneda que el precio actual, para que un `CURRENCY_CHANGE` no se vea como un salto de precio gigante.
+
+**"Me interesa" / "Descartar" compartido entre dispositivos**
+Marcar una propiedad como interesante o descartada se guarda en `silver.property_flags`, no en el navegador — así se ve igual entrando desde el celular o la notebook. Por eso `run_dashboard.py --serve` deja de ser un simple file server: agrega `GET /api/estados` (estado fresco al cargar la página, sin esperar la próxima regeneración del HTML) y `POST /api/estado` (guarda el click). Sin esto, el dashboard sería HTML estático puro; con esto, ese único proceso necesita credenciales de Neon y acepta escritura desde cualquiera en la LAN — aceptable para un uso casero, pero vale tenerlo presente.
+
+**Coordenadas mal geocodificadas por el portal, corregidas sin intervención manual**
+A veces el portal de origen le pone a una dirección correcta unas coordenadas absurdas (a kilómetros, o directamente en otra provincia) — no es un bug nuestro, es el geocodificador del portal. `silver/publicaciones.sql` calcula en cada corrida la mediana de lat/lon de las propias publicaciones (sin centro fijo hardcodeado: si las zonas de búsqueda en `run_ingest.py` cambian, el centro se recalcula solo) y rechaza con motivo `coordenadas_fuera_de_zona` lo que esté a más de 4x la mediana de distancia a ese centro (piso 5km). `geocode_fallback.py` corre después de cada `dbt run` y reintenta ubicar esas direcciones contra Nominatim (OpenStreetMap); si el resultado cae dentro de zona, lo guarda en `silver.coordenadas_override`, que `publicaciones.sql` prefiere sobre la coordenada del portal desde la corrida siguiente. Si Nominatim tampoco puede, se avisa una sola vez por publicación vía Telegram (`silver.coordenadas_no_resueltas` evita repetir el aviso cada 10 minutos) para revisarla a mano.
 
 ---
 
@@ -140,6 +155,10 @@ Crear un proyecto en Neon y aplicar las migraciones en orden:
 ```bash
 psql $NEON_DATABASE_URL -f sql/001_init_schemas.sql
 psql $NEON_DATABASE_URL -f sql/002_silver_events.sql
+psql $NEON_DATABASE_URL -f sql/003_health_alerts.sql
+psql $NEON_DATABASE_URL -f sql/004_property_flags.sql
+psql $NEON_DATABASE_URL -f sql/005_coordenadas_override.sql
+psql $NEON_DATABASE_URL -f sql/006_coordenadas_no_resueltas.sql
 ```
 
 ### Variables de entorno
@@ -204,6 +223,7 @@ PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:mercadolibr
 ```bash
 python run_ingest.py                       # scrape los tres portales en paralelo
 python run_dbt.py                          # transforma con dbt (tipo de cambio auto)
+python geocode_fallback.py                 # reintenta ubicar publicaciones con coordenadas fuera de zona
 python detect_events.py                    # detecta cambios entre última y anteúltima corrida
 python notify.py                           # envía eventos pendientes por Telegram
 python run_dashboard.py                     # genera dashboard.html con métricas
