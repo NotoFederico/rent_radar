@@ -62,6 +62,11 @@ def task_dbt() -> None:
     _run("run_dbt.py")
 
 
+@task(name="geocode-fallback")
+def task_geocode_fallback() -> None:
+    _run("geocode_fallback.py")
+
+
 @task(name="detect-events")
 def task_detect() -> None:
     _run("detect_events.py")
@@ -92,6 +97,7 @@ def pipeline() -> None:
     for f in futures:
         f.result()
     task_dbt()
+    task_geocode_fallback()
     task_detect()
     task_notify()
     task_mapa()

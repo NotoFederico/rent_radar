@@ -84,8 +84,8 @@ enriched as (
         d.moneda,
         d.expensas,
         d.ubicacion,
-        d.latitud,
-        d.longitud,
+        coalesce(co.latitud,  d.latitud)  as latitud,
+        coalesce(co.longitud, d.longitud) as longitud,
         coalesce(d.ambientes, sp.spec_ambientes) as ambientes,
         sp.superficie_cubierta,
         sp.superficie_total,
@@ -97,32 +97,65 @@ enriched as (
         d.especificaciones
     from deduped d
     left join specs_parsed sp on d.id = sp.id
+    left join silver.coordenadas_override co
+        on co.fuente = d.fuente and co.id_publicacion = d.id_publicacion
+),
+
+zona_centro as (
+    -- Mismo cálculo que publicaciones.sql: mediana de lat/lon (robusta a outliers),
+    -- sin centro fijo hardcodeado.
+    select
+        percentile_cont(0.5) within group (order by latitud)  as centro_lat,
+        percentile_cont(0.5) within group (order by longitud) as centro_lon
+    from enriched
+    where latitud is not null and longitud is not null
+      and latitud < 0 and longitud < 0
+),
+
+distancias as (
+    select
+        e.id,
+        sqrt(
+            power((e.latitud - zc.centro_lat) * {{ km_por_grado_lat() }}, 2)
+          + power((e.longitud - zc.centro_lon) * {{ km_por_grado_lat() }} * cos(radians(zc.centro_lat)), 2)
+        ) as distancia_centro_km
+    from enriched e
+    cross join zona_centro zc
+    where e.latitud is not null and e.longitud is not null
+),
+
+zona_radio as (
+    select greatest(percentile_cont(0.5) within group (order by distancia_centro_km) * 4, 5) as radio_km
+    from distancias
 ),
 
 flagged as (
     select
-        *,
+        e.*,
         case
-            when url           is null                                   then 'url_nula'
-            when titulo        is null                                   then 'titulo_nulo'
-            when precio        is null                                   then 'precio_nulo'
-            when moneda        is null                                   then 'moneda_nula'
-            when ubicacion     is null                                   then 'ubicacion_nula'
-            when latitud       is null                                   then 'latitud_nula'
-            when longitud      is null                                   then 'longitud_nula'
-            when ambientes     is null                                   then 'ambientes_nulo'
-            when coalesce(superficie_cubierta, superficie_total) is null then 'superficie_nula'
-            when latitud  >= 0                                           then 'latitud_invalida'
-            when longitud >= 0                                           then 'longitud_invalida'
-            when ambientes     = 0                                       then 'ambientes_cero'
-            when coalesce(superficie_cubierta, superficie_total) = 0    then 'superficie_cero'
-            when precio = 9999999                                        then 'precio_placeholder'
-            when moneda = 'ARS' and precio < 100000                     then 'precio_ars_bajo'
-            when moneda = 'ARS' and precio > 4000000                    then 'precio_ars_alto'
-            when moneda = 'USD' and precio < 100                        then 'precio_usd_bajo'
-            when moneda = 'USD' and precio > 5000                       then 'precio_usd_alto'
+            when e.url           is null                                 then 'url_nula'
+            when e.titulo        is null                                 then 'titulo_nulo'
+            when e.precio        is null                                 then 'precio_nulo'
+            when e.moneda        is null                                 then 'moneda_nula'
+            when e.ubicacion     is null                                 then 'ubicacion_nula'
+            when e.latitud       is null                                 then 'latitud_nula'
+            when e.longitud      is null                                 then 'longitud_nula'
+            when e.ambientes     is null                                 then 'ambientes_nulo'
+            when coalesce(e.superficie_cubierta, e.superficie_total) is null then 'superficie_nula'
+            when e.latitud  >= 0                                         then 'latitud_invalida'
+            when e.longitud >= 0                                         then 'longitud_invalida'
+            when d.distancia_centro_km > zr.radio_km                     then 'coordenadas_fuera_de_zona'
+            when e.ambientes     = 0                                     then 'ambientes_cero'
+            when coalesce(e.superficie_cubierta, e.superficie_total) = 0 then 'superficie_cero'
+            when e.precio = 9999999                                      then 'precio_placeholder'
+            when e.moneda = 'ARS' and e.precio < 100000                  then 'precio_ars_bajo'
+            when e.moneda = 'ARS' and e.precio > 4000000                 then 'precio_ars_alto'
+            when e.moneda = 'USD' and e.precio < 100                     then 'precio_usd_bajo'
+            when e.moneda = 'USD' and e.precio > 5000                    then 'precio_usd_alto'
         end as motivo_rechazo
-    from enriched
+    from enriched e
+    left join distancias d on d.id = e.id
+    cross join zona_radio zr
 )
 
 select *
