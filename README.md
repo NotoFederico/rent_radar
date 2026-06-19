@@ -8,7 +8,7 @@
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.9-blue)
+![Version](https://img.shields.io/badge/version-1.10-blue)
 
 ---
 
@@ -76,7 +76,7 @@ flowchart TD
 | Schema | Tablas | Descripción |
 |--------|--------|-------------|
 | `raw` | `pipeline_runs`, `snapshots` | Salida directa de los spiders |
-| `silver` | `publicaciones`, `publicaciones_rechazadas`, `events`, `notifications` | Datos limpios + auditoría |
+| `silver` | `publicaciones`, `publicaciones_rechazadas`, `events`, `notifications`, `health_alerts`, `property_flags` | Datos limpios + auditoría |
 | `gold` | `candidatas`, `metricas` | Propiedades filtradas por presupuesto y criterios · métricas de la última corrida |
 
 ---
@@ -122,8 +122,8 @@ Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página d
 **Sparkline de precio sin tabla nueva**
 El popup de cada propiedad en el mapa muestra un mini-gráfico con el historial de precio, armado a partir de `raw.snapshots` (no hace falta una tabla histórica nueva: cada corrida ya guarda su propio snapshot). Solo se grafican los puntos con la misma moneda que el precio actual, para que un `CURRENCY_CHANGE` no se vea como un salto de precio gigante.
 
-**"Me interesa" / "Descartar" sin backend**
-El dashboard es HTML estático regenerado cada 10 minutos, así que cualquier estado que dependiera de la base se perdería o complicaría la regeneración. En cambio, marcar una propiedad como interesante o descartada se guarda en `localStorage` del navegador (clave `fuente:id_publicacion`) — sobrevive a la regeneración del dashboard sin tocar el pipeline ni la base, a costa de ser por-dispositivo en vez de compartido.
+**"Me interesa" / "Descartar" compartido entre dispositivos**
+Marcar una propiedad como interesante o descartada se guarda en `silver.property_flags`, no en el navegador — así se ve igual entrando desde el celular o la notebook. Por eso `run_dashboard.py --serve` deja de ser un simple file server: agrega `GET /api/estados` (estado fresco al cargar la página, sin esperar la próxima regeneración del HTML) y `POST /api/estado` (guarda el click). Sin esto, el dashboard sería HTML estático puro; con esto, ese único proceso necesita credenciales de Neon y acepta escritura desde cualquiera en la LAN — aceptable para un uso casero, pero vale tenerlo presente.
 
 ---
 
@@ -150,6 +150,7 @@ Crear un proyecto en Neon y aplicar las migraciones en orden:
 psql $NEON_DATABASE_URL -f sql/001_init_schemas.sql
 psql $NEON_DATABASE_URL -f sql/002_silver_events.sql
 psql $NEON_DATABASE_URL -f sql/003_health_alerts.sql
+psql $NEON_DATABASE_URL -f sql/004_property_flags.sql
 ```
 
 ### Variables de entorno

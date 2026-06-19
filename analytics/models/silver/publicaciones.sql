@@ -87,10 +87,11 @@ candidatos as (
       and titulo not ilike '%venta permuta%'
 ),
 
-duplicados_cross_portal as (
-    -- Detecta pares en distintos portales que son la misma propiedad:
+duplicados as (
+    -- Detecta pares que son la misma propiedad (mismo portal o portales distintos):
     -- mismo bucket lat/lon (±0.001° ≈ 111m), mismos ambientes,
-    -- misma moneda y precio dentro del ±10%.
+    -- misma moneda y precio dentro del ±10%. Incluye duplicados dentro del mismo
+    -- portal (inmobiliarias que repostean el mismo aviso con otro id_publicacion).
     -- De cada par se marca para eliminar el que tenga especificaciones más cortas;
     -- en empate, se descarta el de id mayor (más nuevo).
     select distinct
@@ -106,7 +107,6 @@ duplicados_cross_portal as (
     from candidatos a
     join candidatos b
         on a.id < b.id
-        and a.fuente    != b.fuente
         and a.moneda     = b.moneda
         and a.ambientes  = b.ambientes
         and a.moneda    is not null
@@ -175,7 +175,7 @@ filtered as (
             else null
         end as motivo_rechazo
     from enriched
-    where id not in (select id_a_eliminar from duplicados_cross_portal)
+    where id not in (select id_a_eliminar from duplicados)
 )
 
 select

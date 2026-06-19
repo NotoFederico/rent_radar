@@ -73,6 +73,49 @@ def attach_price_history(rows: list[dict]) -> None:
         row["historial"] = [p["precio"] for p in puntos] if len(puntos) > 1 else []
 
 
+def attach_flags(rows: list[dict]) -> None:
+    """Agrega `estado` ('interesa' | 'descartada' | None) a cada row, in-place.
+
+    Es solo el valor "horneado" al momento de generar el HTML; el frontend
+    además pide /api/estados al cargar para no perder marcas hechas en el
+    intervalo entre regeneraciones (ver Handler.do_GET más abajo).
+    """
+    flags = fetch_flags()
+    for row in rows:
+        row["estado"] = flags.get((row["fuente"], row["id_publicacion"]))
+
+
+def fetch_flags() -> dict[tuple[str, str], str]:
+    conn = psycopg2.connect(DATABASE_URL)
+    with conn.cursor() as cur:
+        cur.execute("select fuente, id_publicacion, estado from silver.property_flags")
+        flags = {(f, i): e for f, i, e in cur.fetchall()}
+    conn.close()
+    return flags
+
+
+def set_flag(fuente: str, id_publicacion: str, estado: str | None) -> None:
+    conn = psycopg2.connect(DATABASE_URL)
+    with conn.cursor() as cur:
+        if estado:
+            cur.execute(
+                """
+                insert into silver.property_flags (fuente, id_publicacion, estado)
+                values (%s, %s, %s)
+                on conflict (fuente, id_publicacion)
+                do update set estado = excluded.estado, actualizado_en = now()
+                """,
+                (fuente, id_publicacion, estado),
+            )
+        else:
+            cur.execute(
+                "delete from silver.property_flags where fuente = %s and id_publicacion = %s",
+                (fuente, id_publicacion),
+            )
+    conn.commit()
+    conn.close()
+
+
 def fetch_metricas() -> dict:
     conn = psycopg2.connect(DATABASE_URL)
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -492,22 +535,31 @@ function sparkline(historial) {{
   </svg>`;
 }}
 
-// ── Estados ("me interesa" / "descartada"), persistidos en el navegador ──
-const ESTADOS_KEY = "rentradar_estados";
-function loadEstados() {{
-  try {{ return JSON.parse(localStorage.getItem(ESTADOS_KEY)) || {{}}; }} catch (e) {{ return {{}}; }}
-}}
-const estados = loadEstados();
+// ── Estados ("me interesa" / "descartada"), persistidos en la base ──
+// DATOS[i].estado trae lo que había al generar el HTML; /api/estados se pide
+// al cargar para no perder marcas hechas en el intervalo entre regeneraciones.
 const keyOf = p => `${{p.fuente}}:${{p.id_publicacion}}`;
+const estados = {{}};
+DATOS.forEach(p => {{ if (p.estado) estados[keyOf(p)] = p.estado; }});
 
-function setEstado(i, valor) {{
+async function setEstado(i, valor) {{
   const p = DATOS[i];
   const k = keyOf(p);
-  estados[k] = estados[k] === valor ? null : valor;
-  if (!estados[k]) delete estados[k];
-  localStorage.setItem(ESTADOS_KEY, JSON.stringify(estados));
+  const nuevo = estados[k] === valor ? null : valor;
+  estados[k] = nuevo;
+  if (!nuevo) delete estados[k];
   aplicarEstado(i);
   markers[i].getPopup().setContent(popupHtml(i));
+  try {{
+    const r = await fetch("/api/estado", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ fuente: p.fuente, id_publicacion: p.id_publicacion, estado: nuevo }}),
+    }});
+    if (!r.ok) throw new Error(`HTTP ${{r.status}}`);
+  }} catch (e) {{
+    console.error("No se pudo guardar el estado:", e);
+  }}
 }}
 
 function aplicarEstado(i) {{
@@ -517,6 +569,14 @@ function aplicarEstado(i) {{
   cards[i].classList.remove("estado-interesa", "estado-descartada");
   if (estado) cards[i].classList.add(`estado-${{estado}}`);
 }}
+
+fetch("/api/estados").then(r => r.ok ? r.json() : {{}}).then(fresh => {{
+  Object.assign(estados, fresh);
+  DATOS.forEach((p, i) => {{
+    if (!(keyOf(p) in fresh)) delete estados[keyOf(p)];
+    aplicarEstado(i);
+  }});
+}}).catch(e => console.error("No se pudo refrescar /api/estados:", e));
 
 // ── Mapa ──
 const mapa = L.map("mapa");
@@ -666,6 +726,9 @@ def main() -> None:
     print("Consultando historial de precios…")
     attach_price_history(rows)
 
+    print("Consultando marcas (me interesa / descartada)…")
+    attach_flags(rows)
+
     print("Consultando gold.metricas…")
     metricas = fetch_metricas()
     if not metricas:
@@ -683,9 +746,19 @@ def main() -> None:
         import http.server
         import socketserver
 
+        ESTADOS_VALIDOS = {"interesa", "descartada"}
+
         class Handler(http.server.SimpleHTTPRequestHandler):
             def log_message(self, *a):
                 pass
+
+            def _json(self, status: int, payload: dict) -> None:
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
 
             def do_GET(self):
                 if self.path == "/mtime":
@@ -699,8 +772,31 @@ def main() -> None:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
+                elif self.path == "/api/estados":
+                    flags = fetch_flags()
+                    self._json(200, {f"{f}:{i}": e for (f, i), e in flags.items()})
                 else:
                     super().do_GET()
+
+            def do_POST(self):
+                if self.path != "/api/estado":
+                    self._json(404, {"error": "not found"})
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length))
+                    fuente = body["fuente"]
+                    id_publicacion = body["id_publicacion"]
+                    estado = body.get("estado")
+                    if not isinstance(fuente, str) or not isinstance(id_publicacion, str):
+                        raise ValueError("fuente/id_publicacion deben ser texto")
+                    if estado is not None and estado not in ESTADOS_VALIDOS:
+                        raise ValueError(f"estado inválido: {estado!r}")
+                except (ValueError, KeyError, json.JSONDecodeError) as exc:
+                    self._json(400, {"error": str(exc)})
+                    return
+                set_flag(fuente, id_publicacion, estado)
+                self._json(200, {"ok": True})
 
         ip = get_local_ip()
         print(f"\n  Servidor en http://{ip}:{args.port}/dashboard.html")

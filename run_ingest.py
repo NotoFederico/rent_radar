@@ -32,7 +32,7 @@ SOURCES: list[Source] = [
         name="argenprop",
         max_pages=20,
         urls=[
-            "https://www.argenprop.com/casas-o-departamentos-o-ph/alquiler/haedo-o-ramos-mejia-o-san-justo-la-matanza-o-villa-luzuriaga-o-villa-sarmiento/3-ambientes-o-4-ambientes-o-5-o-mas-ambientes?1-o-mas-cocheras",
+            "https://www.argenprop.com/casas-o-departamentos-o-ph/alquiler/haedo-o-ramos-mejia-o-san-justo-la-matanza-o-villa-luzuriaga-o-villa-sarmiento/3-ambientes-o-4-ambientes-o-5-o-mas-ambientes?1-o-mas-cocheras&orden-masnuevos-descendente",
             #"https://www.argenprop.com/casas-o-departamentos-o-ph/alquiler/caballito-o-mataderos-o-villa-luro/3-ambientes-o-4-ambientes-o-5-o-mas-ambientes?1-o-mas-cocheras",
         ],
     ),

@@ -5,7 +5,8 @@ After=network.target
 [Service]
 User=YOUR_USER
 WorkingDirectory=YOUR_PROJECT_DIR
-ExecStart=YOUR_PROJECT_DIR/venv/bin/python -m http.server 8080
+EnvironmentFile=YOUR_PROJECT_DIR/.env
+ExecStart=YOUR_PROJECT_DIR/venv/bin/python run_dashboard.py --serve --port 8080
 Restart=on-failure
 RestartSec=5
 
