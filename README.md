@@ -8,7 +8,7 @@
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.8-blue)
+![Version](https://img.shields.io/badge/version-1.9-blue)
 
 ---
 
@@ -118,6 +118,12 @@ Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página d
 
 **Alerta de fuente desactualizada**
 `check_health.py` corre al final de cada pipeline y usa los mismos umbrales que el badge "desactualizado" del dashboard (90 min ZonaProp/ArgenProp, 150 min MercadoLibre) para avisar por Telegram cuando una fuente deja de tener corridas `ok`. La alerta se manda una sola vez por episodio (`silver.health_alerts` guarda el estado) y se avisa también cuando la fuente se recupera, para no spamear cada 10 minutos mientras el bloqueo persiste.
+
+**Sparkline de precio sin tabla nueva**
+El popup de cada propiedad en el mapa muestra un mini-gráfico con el historial de precio, armado a partir de `raw.snapshots` (no hace falta una tabla histórica nueva: cada corrida ya guarda su propio snapshot). Solo se grafican los puntos con la misma moneda que el precio actual, para que un `CURRENCY_CHANGE` no se vea como un salto de precio gigante.
+
+**"Me interesa" / "Descartar" sin backend**
+El dashboard es HTML estático regenerado cada 10 minutos, así que cualquier estado que dependiera de la base se perdería o complicaría la regeneración. En cambio, marcar una propiedad como interesante o descartada se guarda en `localStorage` del navegador (clave `fuente:id_publicacion`) — sobrevive a la regeneración del dashboard sin tocar el pipeline ni la base, a costa de ser por-dispositivo en vez de compartido.
 
 ---
 

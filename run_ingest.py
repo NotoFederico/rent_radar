@@ -24,7 +24,7 @@ SOURCES: list[Source] = [
         name="zonaprop",
         max_pages=20,
         urls=[
-            "https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-mataderos-villa-luzuriaga-ramos-mejia-haedo-san-justo-la-matanza-ciudadela-tres-de-febrero-villa-sarmiento-moron-desde-3-hasta-5-ambientes-mas-de-1-garage-mas-70-m2-cubiertos.html",
+            "https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-mataderos-villa-luzuriaga-ramos-mejia-haedo-san-justo-la-matanza-ciudadela-tres-de-febrero-villa-sarmiento-moron-desde-3-hasta-5-ambientes-mas-de-1-garage-mas-70-m2-cubiertos-orden-publicado-descendente.html",
             #"https://www.zonaprop.com.ar/casas-departamentos-ph-alquiler-mataderos-villa-luro-caballito-naon-mataderos-desde-3-hasta-5-ambientes-mas-de-1-garage-mas-70-m2-cubiertos.html",
         ],
     ),
