@@ -89,13 +89,21 @@ def task_check_health() -> None:
 
 @flow(name="rent-radar", log_prints=True)
 def pipeline() -> None:
-    """ZonaProp + ArgenProp, transformación, detección, notificación y dashboard."""
+    """ZonaProp + ArgenProp, transformación, detección, notificación y dashboard.
+
+    Un ingest que falla (ej. corte de DNS hacia Neon) no debe frenar el resto del
+    pipeline: check_health es justamente el paso que avisa de este tipo de
+    cortes, así que tiene que poder correr en el mismo ciclo aunque el ingest
+    de esa corrida no haya andado.
+    """
     futures = [
         task_ingest_zonaprop.submit(),
         task_ingest_argenprop.submit(),
     ]
     for f in futures:
-        f.result()
+        error = f.result(raise_on_failure=False)
+        if isinstance(error, Exception):
+            print(f"Ingest falló, se sigue con el resto del pipeline igual: {error}")
     task_dbt()
     task_geocode_fallback()
     task_detect()

@@ -1,6 +1,6 @@
 [project]
 name = "rent-radar"
-version = "1.11.1"
+version = "1.12"
 description = "Sistema automatizado de monitoreo de alquileres en portales inmobiliarios argentinos"
 requires-python = ">=3.13"
 dependencies = [

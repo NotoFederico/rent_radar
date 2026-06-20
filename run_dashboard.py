@@ -223,7 +223,7 @@ HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8"/>
 <title>Rent Radar</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
   :root {{
@@ -236,7 +236,15 @@ HTML_TEMPLATE = """\
   * {{ box-sizing:border-box; margin:0; padding:0; }}
   body {{ font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; overflow:hidden; }}
 
-  nav {{ height:var(--nav-h); background:var(--white); border-bottom:1px solid var(--border); display:flex; align-items:center; padding:0 16px; gap:12px; flex-shrink:0; z-index:1000; }}
+  nav {{
+    /* viewport-fit=cover deja que la página ocupe el área del notch; este padding
+       extra (0 en dispositivos sin notch, via env() con fallback) evita que el
+       contenido del nav quede tapado detrás de él en iPhones con Dynamic Island/notch. */
+    height:calc(var(--nav-h) + env(safe-area-inset-top, 0px));
+    padding-top:env(safe-area-inset-top, 0px);
+    background:var(--white); border-bottom:1px solid var(--border); display:flex; align-items:center;
+    padding-left:16px; padding-right:16px; gap:12px; flex-shrink:0; z-index:1000;
+  }}
   .nav-logo {{ font-size:17px; font-weight:700; color:var(--blue); display:flex; align-items:center; gap:7px; }}
   .nav-sep {{ width:1px; height:22px; background:var(--border); }}
   .nav-run {{ font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; }}
