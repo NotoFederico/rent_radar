@@ -8,10 +8,15 @@ que corre en su propio flow con un intervalo mucho más largo e independiente. d
 recoge la última corrida exitosa de cada fuente por separado (ver
 silver/publicaciones.sql), así que no hace falta que coincidan en el tiempo.
 
+La limpieza de raw.snapshots (prune_pipeline) corre aparte de los dos ingests:
+no depende de la salud de ninguno de los dos, y una vez por día alcanza de
+sobra (ver prune_snapshots.py).
+
 Deploy (una sola vez, con el servidor y el pool ya creados):
     prefect work-pool create --type process local
     prefect deploy pipeline.py:pipeline --name cada_10min --pool local --interval 600
     prefect deploy pipeline.py:mercadolibre_pipeline --name meli_cada_1h --pool local --interval 3600
+    prefect deploy pipeline.py:prune_pipeline --name limpieza_diaria --pool local --cron "0 8 * * *"
 
 El worker levanta los runs; este archivo no necesita correr 24/7.
 """
@@ -55,6 +60,11 @@ def task_ingest_argenprop() -> None:
 @task(name="ingest-mercadolibre")
 def task_ingest_mercadolibre() -> None:
     _run("run_ingest.py", "--source", "mercadolibre")
+
+
+@task(name="prune-snapshots")
+def task_prune_snapshots() -> None:
+    _run("prune_snapshots.py")
 
 
 @task(name="dbt")
@@ -116,3 +126,14 @@ def pipeline() -> None:
 def mercadolibre_pipeline() -> None:
     """MercadoLibre por separado, con su propia cadencia (ver deploy arriba)."""
     task_ingest_mercadolibre()
+
+
+@flow(name="rent-radar-prune", log_prints=True)
+def prune_pipeline() -> None:
+    """Mantenimiento de raw.snapshots, independiente de ambos ingests (ver deploy arriba).
+
+    Ni el flow de 10 min ni el de MercadoLibre son el lugar correcto: no hace
+    falta podar la tabla más de una vez por día, y la limpieza no debe
+    depender de la salud de ningún ingest en particular.
+    """
+    task_prune_snapshots()

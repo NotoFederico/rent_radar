@@ -8,7 +8,7 @@
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.12-blue)
+![Version](https://img.shields.io/badge/version-1.13-blue)
 
 ---
 
@@ -58,6 +58,11 @@ flowchart TD
         ML["MercadoLibre · Playwright + stealth"]:::spider
     end
 
+    subgraph PrefectPrune ["⏱ Prefect: rent-radar-prune — diario"]
+        PRUNE["prune_snapshots.py"]:::process
+    end
+
+    PRUNE -.->|borra > 7 dias| RAW
     ZP --> RAW
     AP --> RAW
     ML --> RAW
@@ -122,6 +127,12 @@ Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página d
 **Alerta de fuente desactualizada**
 `check_health.py` corre al final de cada pipeline y usa los mismos umbrales que el badge "desactualizado" del dashboard (90 min ZonaProp/ArgenProp, 150 min MercadoLibre) para avisar por Telegram cuando una fuente deja de tener corridas `ok`. La alerta se manda una sola vez por episodio (`silver.health_alerts` guarda el estado) y se avisa también cuando la fuente se recupera, para no spamear cada 10 minutos mientras el bloqueo persiste.
 
+**Un ingest roto no debe tapar la alerta de salud**
+Si `task_ingest_zonaprop`/`task_ingest_argenprop` fallan (ej. corte de DNS hacia Neon), `pipeline()` ya no deja que ese error tire abajo el flow completo (`f.result(raise_on_failure=False)`): el resto de los pasos, incluido `check_health`, corre igual ese ciclo. Antes de este cambio, una falla de ingest tapaba justo al único paso cuyo trabajo es avisar de ese tipo de cortes.
+
+**Retención de `raw.snapshots`**
+Cada corrida guarda una fila por publicación (cada ~10 min en ZonaProp/ArgenProp), sin límite — esto hizo que el proyecto chocara el tope de almacenamiento de Neon (512 MB en el free tier) y dejara de poder escribir nada, frenando ingest y dbt por igual. `prune_snapshots.py` borra lo de más de `RETENTION_DAYS` (7) días y corre en un flow propio (`rent-radar-prune`, una vez por día) independiente de ambos ingests — ni hace falta podarlo tan seguido, ni la limpieza debe depender de la salud de ningún scraper en particular. Un índice en `fecha_scraping` (`sql/007`) evita que el borrado escanee toda la tabla.
+
 **Sparkline de precio sin tabla nueva**
 El popup de cada propiedad en el mapa muestra un mini-gráfico con el historial de precio, armado a partir de `raw.snapshots` (no hace falta una tabla histórica nueva: cada corrida ya guarda su propio snapshot). Solo se grafican los puntos con la misma moneda que el precio actual, para que un `CURRENCY_CHANGE` no se vea como un salto de precio gigante.
 
@@ -159,6 +170,7 @@ psql $NEON_DATABASE_URL -f sql/003_health_alerts.sql
 psql $NEON_DATABASE_URL -f sql/004_property_flags.sql
 psql $NEON_DATABASE_URL -f sql/005_coordenadas_override.sql
 psql $NEON_DATABASE_URL -f sql/006_coordenadas_no_resueltas.sql
+psql $NEON_DATABASE_URL -f sql/007_snapshots_fecha_index.sql
 ```
 
 ### Variables de entorno
@@ -212,6 +224,8 @@ PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:pipeline \
   --name cada_10min --pool local --interval 600
 PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:mercadolibre_pipeline \
   --name meli_cada_1h --pool local --interval 3600
+PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:prune_pipeline \
+  --name limpieza_diaria --pool local --cron "0 8 * * *"
 ```
 
 ---
@@ -222,6 +236,7 @@ PREFECT_API_URL=http://127.0.0.1:4200/api prefect deploy pipeline.py:mercadolibr
 
 ```bash
 python run_ingest.py                       # scrape los tres portales en paralelo
+python prune_snapshots.py                  # borra snapshots de mas de 7 dias (normalmente corre 1x/dia aparte)
 python run_dbt.py                          # transforma con dbt (tipo de cambio auto)
 python geocode_fallback.py                 # reintenta ubicar publicaciones con coordenadas fuera de zona
 python detect_events.py                    # detecta cambios entre última y anteúltima corrida
