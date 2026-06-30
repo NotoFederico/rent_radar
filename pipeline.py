@@ -97,14 +97,27 @@ def task_check_health() -> None:
     _run("check_health.py")
 
 
+def _try_step(name: str, fn) -> None:
+    """Corre un paso del pipeline sin que su falla frene al resto.
+
+    check_health es el único paso cuyo trabajo es avisar de fallas — así que
+    no puede ser una víctima más de la falla de otro paso (ver incidente del
+    18/6 con un corte de DNS, y el del 29/6 con la base llena: en ambos casos
+    un paso anterior reventó el flow entero antes de llegar a check_health).
+    """
+    try:
+        fn()
+    except Exception as exc:
+        print(f"{name} falló, se sigue con el resto del pipeline igual: {exc}")
+
+
 @flow(name="rent-radar", log_prints=True)
 def pipeline() -> None:
     """ZonaProp + ArgenProp, transformación, detección, notificación y dashboard.
 
-    Un ingest que falla (ej. corte de DNS hacia Neon) no debe frenar el resto del
-    pipeline: check_health es justamente el paso que avisa de este tipo de
-    cortes, así que tiene que poder correr en el mismo ciclo aunque el ingest
-    de esa corrida no haya andado.
+    Ningún paso individual puede frenar al resto: check_health (el que avisa
+    de fallas) tiene que poder correr en el mismo ciclo sin importar qué haya
+    fallado antes.
     """
     futures = [
         task_ingest_zonaprop.submit(),
@@ -114,11 +127,11 @@ def pipeline() -> None:
         error = f.result(raise_on_failure=False)
         if isinstance(error, Exception):
             print(f"Ingest falló, se sigue con el resto del pipeline igual: {error}")
-    task_dbt()
-    task_geocode_fallback()
-    task_detect()
-    task_notify()
-    task_mapa()
+    _try_step("dbt", task_dbt)
+    _try_step("geocode_fallback", task_geocode_fallback)
+    _try_step("detect_events", task_detect)
+    _try_step("notify", task_notify)
+    _try_step("dashboard", task_mapa)
     task_check_health()
 
 

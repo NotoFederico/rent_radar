@@ -31,42 +31,42 @@ from app.telegram import TelegramNotifier
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 USER_AGENT = "rent-radar/1.0 (uso personal - github.com/fede-noto/rent_radar)"
-PAUSA_ENTRE_REQUESTS_SEG = 1.0  # política de uso de Nominatim: máx 1 req/seg
+PAUSE_BETWEEN_REQUESTS_SEC = 1.0  # política de uso de Nominatim: máx 1 req/seg
 
 # Kilómetros por grado de latitud (circunferencia terrestre ≈ 40.008km / 360°).
 # Un grado de longitud equivale a esto mismo * cos(latitud) (los meridianos se
 # acercan cerca de los polos). Mismo valor que km_por_grado_lat() en
 # analytics/macros/distancia.sql — no hay forma de compartir la constante
 # entre SQL y Python sin un servicio aparte, así que se repite a propósito.
-KM_POR_GRADO_LAT = 111.32
+KM_PER_DEGREE_LAT = 111.32
 
 
-def _mediana(valores: list[float]) -> float:
-    valores = sorted(valores)
-    n = len(valores)
-    return valores[n // 2] if n % 2 else (valores[n // 2 - 1] + valores[n // 2]) / 2
+def _median(values: list[float]) -> float:
+    values = sorted(values)
+    n = len(values)
+    return values[n // 2] if n % 2 else (values[n // 2 - 1] + values[n // 2]) / 2
 
 
-def zona_centro_y_radio(cur: psycopg2.extensions.cursor) -> tuple[float, float, float]:
-    """Mismo cálculo que zona_centro/zona_radio en publicaciones.sql: mediana de
+def zone_center_and_radius(cur: psycopg2.extensions.cursor) -> tuple[float, float, float]:
+    """Mismo cálculo que zone_center/zone_radius en publicaciones.sql: mediana de
     lat/lon de las publicaciones ya aceptadas (robusta a outliers, sin punto fijo
     hardcodeado), y radio = 4x la mediana de distancia a ese centro (piso 5km).
     """
     cur.execute("select latitud, longitud from gold.candidatas where latitud is not null and longitud is not null")
-    puntos = [(float(r["latitud"]), float(r["longitud"])) for r in cur.fetchall()]
-    centro_lat = _mediana([lat for lat, _ in puntos])
-    centro_lon = _mediana([lon for _, lon in puntos])
+    points = [(float(r["latitud"]), float(r["longitud"])) for r in cur.fetchall()]
+    center_lat = _median([lat for lat, _ in points])
+    center_lon = _median([lon for _, lon in points])
 
     def dist(lat: float, lon: float) -> float:
-        dlat = (lat - centro_lat) * KM_POR_GRADO_LAT
-        dlon = (lon - centro_lon) * KM_POR_GRADO_LAT * math.cos(math.radians(centro_lat))
+        dlat = (lat - center_lat) * KM_PER_DEGREE_LAT
+        dlon = (lon - center_lon) * KM_PER_DEGREE_LAT * math.cos(math.radians(center_lat))
         return math.hypot(dlat, dlon)
 
-    radio_km = max(_mediana([dist(lat, lon) for lat, lon in puntos]) * 4, 5)
-    return centro_lat, centro_lon, radio_km
+    radius_km = max(_median([dist(lat, lon) for lat, lon in points]) * 4, 5)
+    return center_lat, center_lon, radius_km
 
 
-def get_pendientes(cur: psycopg2.extensions.cursor) -> list[dict]:
+def get_pending(cur: psycopg2.extensions.cursor) -> list[dict]:
     """Publicaciones rechazadas por coordenadas, sin override todavía."""
     cur.execute(
         """
@@ -83,7 +83,7 @@ def get_pendientes(cur: psycopg2.extensions.cursor) -> list[dict]:
     return cur.fetchall()
 
 
-def ya_notificado(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str) -> bool:
+def already_notified(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str) -> bool:
     cur.execute(
         "SELECT 1 FROM silver.coordenadas_no_resueltas WHERE fuente = %s AND id_publicacion = %s",
         (fuente, id_publicacion),
@@ -91,7 +91,7 @@ def ya_notificado(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: 
     return cur.fetchone() is not None
 
 
-def marcar_notificado(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str) -> None:
+def mark_notified(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str) -> None:
     cur.execute(
         """
         INSERT INTO silver.coordenadas_no_resueltas (fuente, id_publicacion)
@@ -102,18 +102,18 @@ def marcar_notificado(cur: psycopg2.extensions.cursor, fuente: str, id_publicaci
     )
 
 
-def limpiar_notificado(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str) -> None:
+def clear_notified(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str) -> None:
     cur.execute(
         "DELETE FROM silver.coordenadas_no_resueltas WHERE fuente = %s AND id_publicacion = %s",
         (fuente, id_publicacion),
     )
 
 
-def geocodificar(direccion: str) -> tuple[float, float] | None:
+def geocode(address: str) -> tuple[float, float] | None:
     try:
         resp = requests.get(
             NOMINATIM_URL,
-            params={"q": f"{direccion}, Argentina", "format": "json", "limit": 1},
+            params={"q": f"{address}, Argentina", "format": "json", "limit": 1},
             headers={"User-Agent": USER_AGENT},
             timeout=10,
         )
@@ -127,7 +127,7 @@ def geocodificar(direccion: str) -> tuple[float, float] | None:
     return float(data[0]["lat"]), float(data[0]["lon"])
 
 
-def guardar_override(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str, lat: float, lon: float) -> None:
+def save_override(cur: psycopg2.extensions.cursor, fuente: str, id_publicacion: str, lat: float, lon: float) -> None:
     cur.execute(
         """
         INSERT INTO silver.coordenadas_override (fuente, id_publicacion, latitud, longitud)
@@ -139,7 +139,7 @@ def guardar_override(cur: psycopg2.extensions.cursor, fuente: str, id_publicacio
     )
 
 
-def _notificar_no_resuelta(notifier: TelegramNotifier, row: dict) -> bool:
+def _notify_unresolved(notifier: TelegramNotifier, row: dict) -> bool:
     titulo = (row.get("titulo") or "Sin título")[:70]
     msg = (
         f"📍 *No se pudo ubicar en el mapa*\n\n"
@@ -158,46 +158,46 @@ def main() -> None:
     conn.autocommit = False
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    pendientes = get_pendientes(cur)
-    if not pendientes:
-        print("Sin publicaciones pendientes de re-geocodificar.")
+    pending = get_pending(cur)
+    if not pending:
+        print("Sin publicaciones pendientes de re-geocode.")
         cur.close()
         conn.close()
         return
 
-    centro_lat, centro_lon, radio_km = zona_centro_y_radio(cur)
-    print(f"Zona: centro=({centro_lat:.5f}, {centro_lon:.5f}) radio={radio_km:.1f}km")
+    center_lat, center_lon, radius_km = zone_center_and_radius(cur)
+    print(f"Zona: centro=({center_lat:.5f}, {center_lon:.5f}) radio={radius_km:.1f}km")
 
     notifier: TelegramNotifier | None = None
 
-    print(f"Re-geocodificando {len(pendientes)} publicacion(es)...")
-    resueltas = 0
-    for i, row in enumerate(pendientes):
+    print(f"Re-geocodificando {len(pending)} publicacion(es)...")
+    resolved = 0
+    for i, row in enumerate(pending):
         if i > 0:
-            time.sleep(PAUSA_ENTRE_REQUESTS_SEG)
+            time.sleep(PAUSE_BETWEEN_REQUESTS_SEC)
 
-        etiqueta = f"{row['fuente']}:{row['id_publicacion']}"
-        coords = geocodificar(row["ubicacion"])
-        fuera_de_zona = False
+        label = f"{row['fuente']}:{row['id_publicacion']}"
+        coords = geocode(row["ubicacion"])
+        out_of_zone = False
         if coords is not None:
             lat, lon = coords
-            dlat = (lat - centro_lat) * KM_POR_GRADO_LAT
-            dlon = (lon - centro_lon) * KM_POR_GRADO_LAT * math.cos(math.radians(centro_lat))
-            fuera_de_zona = math.hypot(dlat, dlon) > radio_km
+            dlat = (lat - center_lat) * KM_PER_DEGREE_LAT
+            dlon = (lon - center_lon) * KM_PER_DEGREE_LAT * math.cos(math.radians(center_lat))
+            out_of_zone = math.hypot(dlat, dlon) > radius_km
 
-        if coords is not None and not fuera_de_zona:
+        if coords is not None and not out_of_zone:
             lat, lon = coords
-            guardar_override(cur, row["fuente"], row["id_publicacion"], lat, lon)
-            limpiar_notificado(cur, row["fuente"], row["id_publicacion"])
+            save_override(cur, row["fuente"], row["id_publicacion"], lat, lon)
+            clear_notified(cur, row["fuente"], row["id_publicacion"])
             conn.commit()
-            resueltas += 1
-            print(f"  {etiqueta} -> corregida ({lat:.5f}, {lon:.5f})")
+            resolved += 1
+            print(f"  {label} -> corregida ({lat:.5f}, {lon:.5f})")
             continue
 
-        motivo = "sin resultado de Nominatim" if coords is None else "geocodificado pero sigue fuera de zona"
-        print(f"  {etiqueta} -> {motivo}, se mantiene rechazada")
+        reason = "sin resultado de Nominatim" if coords is None else "geocodificado pero sigue fuera de zona"
+        print(f"  {label} -> {reason}, se mantiene rechazada")
 
-        if ya_notificado(cur, row["fuente"], row["id_publicacion"]):
+        if already_notified(cur, row["fuente"], row["id_publicacion"]):
             continue
         if notifier is None:
             try:
@@ -205,13 +205,13 @@ def main() -> None:
             except ValueError as exc:
                 print(f"  (sin Telegram configurado, no se avisa: {exc})")
                 continue
-        if _notificar_no_resuelta(notifier, row):
-            marcar_notificado(cur, row["fuente"], row["id_publicacion"])
+        if _notify_unresolved(notifier, row):
+            mark_notified(cur, row["fuente"], row["id_publicacion"])
             conn.commit()
         else:
-            print(f"  {etiqueta} -> fallo el envio a Telegram, se reintenta la proxima corrida")
+            print(f"  {label} -> fallo el envio a Telegram, se reintenta la proxima corrida")
 
-    print(f"Resueltas: {resueltas}/{len(pendientes)}")
+    print(f"Resueltas: {resolved}/{len(pending)}")
     cur.close()
     conn.close()
 
