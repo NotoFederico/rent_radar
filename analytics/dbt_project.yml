@@ -30,7 +30,7 @@ clean-targets:         # directories to be removed by `dbt clean`
 # directory as views. These settings can be overridden in the individual model
 # files using the `{{ config(...) }}` macro.
 vars:
-  tipo_cambio_usd: 1450
+  tipo_cambio_usd: 1490
   presupuesto_ars: 1500000
 
 models:

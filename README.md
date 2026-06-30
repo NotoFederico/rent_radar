@@ -8,7 +8,7 @@
 ![Prefect](https://img.shields.io/badge/Prefect-self--hosted-7B4FFF?logo=prefect&logoColor=white)
 ![Postgres](https://img.shields.io/badge/Neon-Postgres-00E599?logo=postgresql&logoColor=white)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot_API-26A5E4?logo=telegram&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.14-blue)
+![Version](https://img.shields.io/badge/version-1.15-blue)
 
 ---
 
@@ -119,7 +119,7 @@ Playwright scrapea MercadoLibre con delays anti-bot que pueden llevar 20-30 minu
 Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página de detalle también quedó bloqueada), `main.py` marca esa corrida como `empty` en vez de `ok`. Como `silver/publicaciones.sql` y `detect_events.py` solo consideran corridas `ok` para determinar "la última con datos", esto evita que un bloqueo temporal tire a 0 las propiedades de un portal en el dashboard o dispare falsos `OFF_MARKET` en cadena.
 
 **Tipo de cambio dinámico**
-`run_dbt.py` consulta la API de dolarapi.com antes de cada run y pasa el tipo de cambio USD como variable dbt, permitiendo filtrar por presupuesto en pesos usando cotización actualizada automáticamente.
+`run_dbt.py` consulta la API de dolarapi.com antes de cada run y pasa el tipo de cambio USD como variable dbt, permitiendo filtrar por presupuesto en pesos usando cotización actualizada automáticamente. El valor usado en cada corrida queda en `gold.metricas.tipo_cambio_usd_usado` — antes solo se imprimía en el log de esa corrida de Prefect, sin quedar registrado en ningún lado consultable.
 
 **Timeout de inactividad por spider**
 `run_ingest.py` monitorea la última actividad de cada spider. Si un proceso lleva más de 120 segundos sin emitir resultados, se lo termina forzosamente para no bloquear el pipeline completo.
@@ -127,8 +127,10 @@ Si el scraper devuelve publicaciones sin precio (por ejemplo porque la página d
 **Alerta de fuente desactualizada**
 `check_health.py` corre al final de cada pipeline y usa los mismos umbrales que el badge "desactualizado" del dashboard (90 min ZonaProp/ArgenProp, 150 min MercadoLibre) para avisar por Telegram cuando una fuente deja de tener corridas `ok`. La alerta se manda una sola vez por episodio (`silver.health_alerts` guarda el estado) y se avisa también cuando la fuente se recupera, para no spamear cada 10 minutos mientras el bloqueo persiste.
 
-**Un ingest roto no debe tapar la alerta de salud**
-Si `task_ingest_zonaprop`/`task_ingest_argenprop` fallan (ej. corte de DNS hacia Neon), `pipeline()` ya no deja que ese error tire abajo el flow completo (`f.result(raise_on_failure=False)`): el resto de los pasos, incluido `check_health`, corre igual ese ciclo. Antes de este cambio, una falla de ingest tapaba justo al único paso cuyo trabajo es avisar de ese tipo de cortes.
+**Ningún paso roto debe tapar la alerta de salud**
+`check_health` es el único paso cuyo trabajo es avisar de fallas, así que no puede ser una víctima más de la falla de otro paso. `pipeline()` ya no deja que el ingest (`f.result(raise_on_failure=False)`) ni dbt/geocode_fallback/detect_events/notify/dashboard (`_try_step`) tiren abajo el flow completo — cada uno corre best-effort y, si falla, el resto sigue igual ese ciclo. Esto salió de dos incidentes reales: un corte de DNS hacia Neon que tumbó el ingest, y la base llena que tumbó dbt — en ambos casos un paso anterior reventaba el flow entero antes de llegar a `check_health`.
+
+Pero queda un caso límite: si la base está totalmente inalcanzable, `check_health.py` tampoco puede conectarse para chequear nada. Por eso tiene su propio fallback: si falla por completo, avisa por Telegram igual ("no pude completar el chequeo") usando un marcador en disco (no en la base, que es justo lo que no anda) para no repetir el aviso cada 10 minutos mientras el corte persiste, y avisa también cuando logra reconectar.
 
 **Retención de `raw.snapshots`**
 Cada corrida guarda una fila por publicación (cada ~10 min en ZonaProp/ArgenProp), sin límite — esto hizo que el proyecto chocara el tope de almacenamiento de Neon (512 MB en el free tier) y dejara de poder escribir nada, frenando ingest y dbt por igual. `prune_snapshots.py` borra lo de más de `RETENTION_DAYS` (7) días y corre en un flow propio (`rent-radar-prune`, una vez por día) independiente de ambos ingests — ni hace falta podarlo tan seguido, ni la limpieza debe depender de la salud de ningún scraper en particular. Un índice en `fecha_scraping` (`sql/007`) evita que el borrado escanee toda la tabla.
@@ -263,16 +265,3 @@ python run_dashboard.py --serve --port 8080
 sudo journalctl -u prefect-worker -f
 ```
 
----
-
-## Estado
-
-- [x] Spiders: ZonaProp, ArgenProp, MercadoLibre
-- [x] Pipeline dbt: raw → silver → gold
-- [x] Detección de eventos (6 tipos)
-- [x] Notificaciones Telegram con encabezado por corrida
-- [x] Dashboard interactivo con métricas, mediana de precios y live-reload
-- [x] Orquestación Prefect self-hosted, con MercadoLibre en flow propio
-- [x] Tabla de métricas en gold
-- [x] Indicador de datos desactualizados por portal
-- [ ] Filtros en el frontend del mapa

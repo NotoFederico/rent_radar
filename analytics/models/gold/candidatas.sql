@@ -1,6 +1,6 @@
 select *
 from {{ ref('publicaciones') }}
-where superficie_cubierta > 70
+where superficie_cubierta >= 70
   and ambientes > 2
   and (
       (moneda = 'USD' and (precio + coalesce(expensas, 0) / {{ var('tipo_cambio_usd') }}) <= {{ var('presupuesto_ars') }} / {{ var('tipo_cambio_usd') }})

@@ -57,7 +57,8 @@ fechas_fuente as (
 )
 
 select
-    now()                   as calculado_en,
+    now()                            as calculado_en,
+    {{ var('tipo_cambio_usd') }}     as tipo_cambio_usd_usado,
     cs.*,
     er.*,
     rs.*,
